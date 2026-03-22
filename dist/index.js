@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { resolve, join } from "node:path";
 import { existsSync, writeFileSync, readFileSync } from "node:fs";
 import treeKill from "tree-kill";
@@ -96,6 +96,62 @@ function initCommand(cwd) {
             }
         }
         catch { }
+    }
+    // ── Preflight checks ──
+    section("PREFLIGHT");
+    let preflightOk = true;
+    // Check Node.js version
+    const nodeVer = process.versions.node;
+    const [nodeMajor, nodeMinor] = nodeVer.split(".").map(Number);
+    const nodeOk = nodeMajor >= 22 || (nodeMajor === 20 && nodeMinor >= 19);
+    if (nodeOk) {
+        success(`Node.js ${nodeVer}`);
+    }
+    else {
+        warn(`Node.js ${nodeVer} — some tools (Vite 6+) require >=20.19 or >=22.12`);
+        info(`  ${c.dim}Fix: nvm install 22 && nvm use 22${c.reset}`);
+        preflightOk = false;
+    }
+    // Check npm dependencies installed
+    if (existsSync(pkgPath) && !existsSync(join(cwd, "node_modules"))) {
+        warn("node_modules not found — run npm install first");
+        info(`  ${c.dim}Fix: npm install${c.reset}`);
+        preflightOk = false;
+    }
+    else {
+        success("Dependencies installed");
+    }
+    if (isTauri) {
+        // Check Rust toolchain
+        try {
+            const rustcVer = execSync("rustc --version 2>/dev/null", {
+                cwd, timeout: 5000,
+                env: { ...process.env, ...serveEnv },
+            }).toString().trim();
+            success(`Rust: ${rustcVer}`);
+        }
+        catch {
+            warn("rustc not found — Tauri requires the Rust toolchain");
+            info(`  ${c.dim}Fix: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh${c.reset}`);
+            preflightOk = false;
+        }
+        // Check @tauri-apps/cli is actually installed in node_modules
+        const tauriCliBin = join(cwd, "node_modules", ".bin", "tauri");
+        if (existsSync(tauriCliBin)) {
+            success("@tauri-apps/cli installed");
+        }
+        else if (existsSync(join(cwd, "node_modules"))) {
+            warn("@tauri-apps/cli not found in node_modules");
+            info(`  ${c.dim}Fix: npm install${c.reset}`);
+            preflightOk = false;
+        }
+    }
+    if (preflightOk) {
+        success(`${c.green}All checks passed${c.reset}`);
+    }
+    else {
+        warn("Some checks failed — debug-toolkit will still install but serve mode may not work");
+        info(`  ${c.dim}Fix the issues above, then run: npx debug-toolkit init${c.reset}`);
     }
     // Write MCP config — .mcp.json at project root (Claude Code v2.x standard)
     const mcpPath = join(cwd, ".mcp.json");
