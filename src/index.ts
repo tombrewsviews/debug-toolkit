@@ -61,10 +61,8 @@ function initCommand(cwd: string): void {
     } catch {}
   }
 
-  // Write MCP config
-  const claudeDir = join(cwd, ".claude");
-  if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true });
-  const mcpPath = join(claudeDir, "mcp.json");
+  // Write MCP config — .mcp.json at project root (Claude Code v2.x standard)
+  const mcpPath = join(cwd, ".mcp.json");
 
   const existing: any = existsSync(mcpPath) ? JSON.parse(readFileSync(mcpPath, "utf-8")) : { mcpServers: {} };
   existing.mcpServers ??= {};

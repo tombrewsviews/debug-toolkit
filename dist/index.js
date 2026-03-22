@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { resolve, join } from "node:path";
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync } from "node:fs";
 import treeKill from "tree-kill";
 import { pipeProcess } from "./capture.js";
 import { startProxy, detectPort } from "./proxy.js";
@@ -67,11 +67,8 @@ function initCommand(cwd) {
         }
         catch { }
     }
-    // Write MCP config
-    const claudeDir = join(cwd, ".claude");
-    if (!existsSync(claudeDir))
-        mkdirSync(claudeDir, { recursive: true });
-    const mcpPath = join(claudeDir, "mcp.json");
+    // Write MCP config — .mcp.json at project root (Claude Code v2.x standard)
+    const mcpPath = join(cwd, ".mcp.json");
     const existing = existsSync(mcpPath) ? JSON.parse(readFileSync(mcpPath, "utf-8")) : { mcpServers: {} };
     existing.mcpServers ??= {};
     // OPTION A: Pure MCP mode (zero-config, no proxy)
