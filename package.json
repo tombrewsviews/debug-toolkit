@@ -1,6 +1,6 @@
 {
   "name": "debug-toolkit",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Closed-loop debugging toolkit for AI coding agents",
   "type": "module",
   "bin": {
@@ -16,7 +16,12 @@
     "hooks",
     "SKILL.md"
   ],
-  "keywords": ["debugging", "ai", "mcp", "developer-tools"],
+  "keywords": [
+    "debugging",
+    "ai",
+    "mcp",
+    "developer-tools"
+  ],
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
