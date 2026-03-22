@@ -1,0 +1,33 @@
+{
+  "name": "debug-toolkit",
+  "version": "0.4.0",
+  "description": "Closed-loop debugging toolkit for AI coding agents",
+  "type": "module",
+  "bin": {
+    "debug-toolkit": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc && cp src/injected.js dist/injected.js",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "SKILL.md"
+  ],
+  "keywords": ["debugging", "ai", "mcp", "developer-tools"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "http-proxy": "^1.18.1",
+    "tree-kill": "^1.2.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/http-proxy": "^1.17.16",
+    "@types/node": "^22.13.0",
+    "@types/ws": "^8.5.14",
+    "typescript": "^5.7.0"
+  }
+}
