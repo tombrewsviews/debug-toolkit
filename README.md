@@ -7,6 +7,82 @@ npx debug-toolkit demo     # see it work (no AI needed)
 npx debug-toolkit init     # install in your project
 ```
 
+## See It Work
+
+Run `npx debug-toolkit demo` — creates a temp project with a real bug, walks through the full debug loop, no AI needed:
+
+```
+━━━ Step 1: debug_investigate ━━━
+  tool: debug_investigate
+  ✓ Error type: TypeError — type
+  ✓ Source: src/api.ts:8
+     >> 8 |   const names = users.map(u => u.name);  // BUG: users can be undefined
+  ✓ Suggestion: Check for null/undefined values being accessed as objects
+
+━━━ Step 2: debug_instrument ━━━
+  tool: debug_instrument
+  ✓ Marker: DBG_001
+  ✓ Hypothesis: "getUsers() returns undefined"
+
+━━━ Step 3: debug_capture ━━━
+  tool: debug_capture
+  ✓ Tagged output: [DBG_001] users = undefined
+  ✓ Hypothesis confirmed → CONFIRMED
+
+━━━ Step 5: debug_verify ━━━
+  ✓ Exit code: 0   ✓ Errors: 0   ✓ Verdict: PASSED
+
+━━━ Step 6: debug_cleanup ━━━
+  ✓ Diagnosis saved to memory
+  ✓ Causal chain: src/api.ts (error) → src/db.ts (cause)
+
+━━━ Step 7: debug_recall (new session, same error) ━━━
+  ✓ Past diagnosis found: 67% relevance
+  ✓ Root cause: getUsers() returns undefined when db not connected
+  ✓ Look at: src/db.ts (not src/api.ts)
+  → Agent can skip investigation entirely and apply the known fix!
+
+━━━ Step 8: debug_patterns ━━━
+  [WARNING] TypeError has occurred 4 times in src/api.ts
+  [WARNING] Possible regression: was fixed before but reappeared
+```
+
+<details>
+<summary>Full demo output (value report)</summary>
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  VALUE REPORT                                           │
+└─────────────────────────────────────────────────────────┘
+  What the agent gathered in one debug session:
+
+    ✓ Error classification     TypeError, type error, severity high
+    ✓ Source code at crash     Exact line with surrounding context
+    ✓ Git context              Branch, commit, recent changes
+    ✓ Runtime environment      Node version, frameworks, env vars (redacted)
+    ✓ Instrumented values      users = undefined (tagged, linked to hypothesis)
+    ✓ Verification result      Exit code 0, 0 errors
+    ✓ Causal chain             error in api.ts caused by bug in db.ts
+    ✓ Diagnosis persisted      Searchable in future sessions
+    ✓ Git SHA tagged           Staleness detection for future recall
+    ✓ Pattern detection        Recurring errors, hot files, regressions
+
+  Data points collected: 17
+  Time elapsed: 2.9s
+  Memory entries: 4
+  Patterns detected: 5
+
+  Without debug-toolkit:
+    User pastes error → agent guesses fix → repeat 5-8 times
+    Typical: 8-12 conversation turns, no learning
+
+  With debug-toolkit:
+    investigate → instrument → capture → fix → verify → cleanup
+    1-2 turns with full context. Diagnosis saved for next time.
+```
+
+</details>
+
 ## The Problem
 
 When an AI agent hits a bug, it reads code and guesses a fix. You run it, paste the error back, the agent guesses again. Repeat 5-8 times.
