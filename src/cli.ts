@@ -95,7 +95,7 @@ export function printHelp(): void {
     ${c.white}Serve${c.reset}      ${c.green}npx debug-toolkit serve -- npm run dev${c.reset}
                ${c.dim}Everything above + browser console/network capture via proxy${c.reset}
 
-  ${c.bold}9 TOOLS + 1 RESOURCE${c.reset} ${c.dim}(what the AI agent sees)${c.reset}
+  ${c.bold}8 TOOLS + 1 RESOURCE${c.reset} ${c.dim}(what the AI agent sees)${c.reset}
     ${c.cyan}debug_investigate${c.reset}   ${c.bold}Error in ${sym.arrow} full context out${c.reset} ${c.dim}+ auto-recall past fixes${c.reset}
     ${c.cyan}debug_recall${c.reset}        Search past sessions ${c.dim}(with staleness + causal chains)${c.reset}
     ${c.cyan}debug_patterns${c.reset}      Detect recurring errors, hot files, regressions

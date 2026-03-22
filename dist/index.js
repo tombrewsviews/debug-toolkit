@@ -182,7 +182,7 @@ async function main() {
                 }
             }
             startMcpServer().catch((e) => error(`MCP: ${e}`));
-            ready(9);
+            ready(8);
             const cleanup = () => {
                 if (child.pid)
                     treeKill(child.pid, "SIGTERM");
