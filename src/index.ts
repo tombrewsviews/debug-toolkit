@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
 import { spawn, execSync } from "node:child_process";
-import { resolve, join } from "node:path";
+import { resolve, join, dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 import treeKill from "tree-kill";
 import { pipeProcess } from "./capture.js";
 import { startProxy, detectPort } from "./proxy.js";
@@ -269,6 +272,49 @@ Never say "the fix works" without verification output.
 The debug memory system learns from every session. The more you use it, the faster future debugging becomes.
 `);
   success(`Activation rules ${sym.arrow} ${rulesPath}`);
+
+  // Install SKILL.md — Claude Code auto-discovers skills from .claude/skills/
+  const skillDir = join(cwd, ".claude", "skills", "debug-toolkit");
+  if (!existsSync(skillDir)) mkdirSync(skillDir, { recursive: true });
+  const skillPath = join(skillDir, "SKILL.md");
+
+  // Find the SKILL.md from the installed package (dist/../SKILL.md)
+  let skillContent: string | null = null;
+  for (const p of [join(__dirname, "..", "SKILL.md"), join(__dirname, "SKILL.md")]) {
+    if (existsSync(p)) { skillContent = readFileSync(p, "utf-8"); break; }
+  }
+
+  if (skillContent) {
+    writeFileSync(skillPath, skillContent);
+    success(`Skill installed ${sym.arrow} ${skillPath}`);
+  } else {
+    // Inline fallback — write the essential skill content
+    writeFileSync(skillPath, `---
+name: debug-toolkit
+description: "Closed-loop debugging for AI agents. Use for runtime errors, stack traces, test failures, AND logic/behavior bugs. Start every debugging task with debug_investigate."
+tools: ["debug_investigate", "debug_recall", "debug_patterns", "debug_instrument", "debug_capture", "debug_verify", "debug_cleanup", "debug_session"]
+---
+
+# debug-toolkit
+
+You have access to a debugging toolkit via MCP. Start every debugging task with \`debug_investigate\`.
+
+## When to Use
+- Runtime error or stack trace
+- Test failure
+- Wrong output / visual bug / logic bug
+- Bug report from a user
+
+## Workflow
+1. debug_investigate → understand the error + auto-recall past fixes
+2. debug_instrument → add logging if needed
+3. debug_capture → collect runtime output
+4. (apply fix)
+5. debug_verify → confirm the fix works
+6. debug_cleanup → remove markers, save diagnosis to memory
+`);
+    success(`Skill installed ${sym.arrow} ${skillPath}`);
+  }
 
   if (isTauri) {
     section("TAURI SUPPORT");
