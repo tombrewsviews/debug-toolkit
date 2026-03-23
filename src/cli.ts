@@ -39,7 +39,7 @@ export const sym = {
 export function banner(): void {
   const lines = [
     "",
-    `  ${c.bold}${c.cyan}debug-toolkit${c.reset} ${c.dim}v0.3.0${c.reset}`,
+    `  ${c.bold}${c.cyan}debug-toolkit${c.reset} ${c.dim}v0.5.0${c.reset}`,
     `  ${c.dim}closed-loop debugging for AI agents${c.reset}`,
     "",
   ];
@@ -82,7 +82,7 @@ export function ready(toolCount: number): void {
 
 export function printHelp(): void {
   console.log(`
-  ${c.bold}${c.cyan}debug-toolkit${c.reset} ${c.dim}v0.3.0${c.reset}
+  ${c.bold}${c.cyan}debug-toolkit${c.reset} ${c.dim}v0.5.0${c.reset}
   ${c.dim}Closed-loop debugging for AI agents${c.reset}
 
   ${c.bold}SETUP${c.reset} ${c.dim}(one time)${c.reset}

@@ -204,27 +204,29 @@ function initCommand(cwd: string): void {
   const existing: any = existsSync(mcpPath) ? JSON.parse(readFileSync(mcpPath, "utf-8")) : { mcpServers: {} };
   existing.mcpServers ??= {};
 
-  // OPTION A: Pure MCP mode (zero-config, no proxy)
+  // Register ONLY the pure MCP server (lightweight, no app startup)
   existing.mcpServers["debug-toolkit"] = {
     command: "npx",
     args: ["-y", "debug-toolkit"],
   };
 
-  // OPTION B: With dev server wrapping (full capture)
-  const serveArgs = ["-y", "debug-toolkit", "serve"];
-  if (servePort) serveArgs.push("--port", String(servePort));
-  serveArgs.push("--", ...devCmd);
-
-  const serveConfig: Record<string, unknown> = {
-    command: "npx",
-    args: serveArgs,
-  };
-  if (serveEnv) serveConfig.env = serveEnv;
-
-  existing.mcpServers["debug-toolkit-serve"] = serveConfig;
+  // REMOVE any previously registered serve mode (from older versions)
+  // Serve mode should NOT be an always-on MCP server — it launches the
+  // dev server which is too heavy and may fail during Claude Code startup.
+  delete existing.mcpServers["debug-toolkit-serve"];
 
   writeFileSync(mcpPath, JSON.stringify(existing, null, 2) + "\n");
   success(`MCP config ${sym.arrow} ${mcpPath}`);
+
+  // Save serve command for reference (not auto-started)
+  const serveArgs = ["-y", "debug-toolkit", "serve"];
+  if (servePort) serveArgs.push("--port", String(servePort));
+  serveArgs.push("--", ...devCmd);
+  const serveCmd = `npx ${serveArgs.join(" ")}`;
+  const serveCmdPath = join(cwd, ".debug", "serve-command.txt");
+  if (!existsSync(join(cwd, ".debug"))) mkdirSync(join(cwd, ".debug"), { recursive: true });
+  writeFileSync(serveCmdPath, serveCmd + "\n");
+  dim(`  Serve command saved to ${serveCmdPath}`);
 
   // Hook
   const h = installHook(cwd);
@@ -234,20 +236,37 @@ function initCommand(cwd: string): void {
   const rulesDir = join(cwd, ".claude", "rules");
   if (!existsSync(rulesDir)) mkdirSync(rulesDir, { recursive: true });
   const rulesPath = join(rulesDir, "debug-toolkit.md");
-  writeFileSync(rulesPath, `# debug-toolkit rules
+  writeFileSync(rulesPath, `# debug-toolkit — activation rules
 
-When debugging, ALWAYS use the debug-toolkit MCP tools instead of manual investigation:
+## TRIGGER: Any error, failure, or bug
 
-- Runtime error or stack trace → call \`debug_investigate\` with the error output
-- Test failure → call \`debug_investigate\` with the test output
-- Logic/behavior bug ("wrong output", "doesn't match", "off by") → call \`debug_investigate\` with \`files\` parameter pointing to suspect files
-- Before any debugging → call \`debug_recall\` to check if this was solved before
-- After fixing any bug → call \`debug_cleanup\` with diagnosis and rootCause
+When you encounter ANY of these, call \`debug_investigate\` BEFORE reading code manually:
 
-Do NOT skip debug_investigate and jump to reading code manually.
-The tool provides error classification, source snippets, git context, environment, AND past solutions in one call.
+| Trigger | Action |
+|---------|--------|
+| Stack trace or error output | \`debug_investigate({ error: "<paste stack trace>" })\` |
+| Test failure | \`debug_investigate({ error: "<test output>" })\` |
+| "Wrong output" / "doesn't match" / visual bug | \`debug_investigate({ error: "<description>", files: ["src/..."] })\` |
+| User reports a bug | \`debug_investigate({ error: "<user's description>", files: ["likely files"] })\` |
 
-After applying a fix, ALWAYS call \`debug_verify\` to confirm it works before claiming success.
+## TRIGGER: After fixing any bug
+
+ALWAYS call \`debug_cleanup\` with:
+- \`diagnosis\`: one-line root cause
+- \`rootCause\`: \`{ trigger, errorFile, causeFile, fixDescription }\`
+
+This saves the diagnosis for future sessions. Skipping this wastes the work.
+
+## TRIGGER: Before claiming a fix works
+
+ALWAYS call \`debug_verify({ command: "npm test" })\` or equivalent.
+Never say "the fix works" without verification output.
+
+## WHY
+
+\`debug_investigate\` returns error classification, source code, git diff, environment, AND past solutions — all in one call. Manually reading files with Read/Grep gives you less context and takes more turns.
+
+The debug memory system learns from every session. The more you use it, the faster future debugging becomes.
 `);
   success(`Activation rules ${sym.arrow} ${rulesPath}`);
 
@@ -261,12 +280,14 @@ After applying a fix, ALWAYS call \`debug_verify\` to confirm it works before cl
     dim("");
   }
 
-  section("TWO MODES");
-  info(`${c.cyan}debug-toolkit${c.reset}        ${c.dim}Pure MCP server — investigate, instrument, verify${c.reset}`);
-  info(`${c.cyan}debug-toolkit serve${c.reset}   ${c.dim}+ dev server wrapping for ${isTauri ? "Tauri" : "browser"} capture${c.reset}`);
+  section("READY");
+  info(`${c.green}${sym.check}${c.reset} ${c.cyan}debug-toolkit${c.reset} registered as MCP server (auto-starts with Claude Code)`);
   dim("");
-  info("Both modes registered. Restart Claude Code to activate.");
-  dim(`Edit ${mcpPath} to customize\n`);
+  info(`${c.dim}For live browser/terminal capture, run separately:${c.reset}`);
+  info(`  ${c.cyan}npx debug-toolkit serve -- ${devCmd.join(" ")}${c.reset}`);
+  dim("");
+  info("Restart Claude Code to activate.");
+  dim(`Config: ${mcpPath}\n`);
 }
 
 // --- Main ---

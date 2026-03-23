@@ -26,7 +26,7 @@ function text(data) {
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 export function createMcpServer() {
-    const server = new McpServer({ name: "debug-toolkit", version: "0.4.0" }, { capabilities: { tools: {}, resources: {} } });
+    const server = new McpServer({ name: "debug-toolkit", version: "0.5.0" }, { capabilities: { tools: {}, resources: {} } });
     // ━━━ RESOURCE: debug_methodology ━━━
     // Always-available debugging methodology. The "hot memory" tier.
     server.registerResource("debug_methodology", "debug://methodology", {
@@ -65,10 +65,16 @@ Start every debugging session with this tool.`,
         const result = investigate(errorText, cwd, hintFiles);
         // Check memory for past solutions to similar errors
         const pastSolutions = recall(cwd, errorText, 3);
-        // Store as capture
+        // Store as capture (include hint files for file tracking in cleanup)
         session.captures.push({
             id: `inv_${Date.now()}`, timestamp: new Date().toISOString(),
-            source: "environment", markerTag: null, data: { type: "investigation", error: result.error },
+            source: "environment", markerTag: null,
+            data: {
+                type: "investigation",
+                error: result.error,
+                hintFiles: hintFiles ?? [],
+                sourceFiles: result.sourceCode.map((s) => s.relativePath),
+            },
             hypothesisId: null,
         });
         saveSession(cwd, session);
@@ -203,7 +209,9 @@ Results are paginated — only the most recent captures are returned.`,
                 ? "Errors detected. Use debug_investigate with the error text for full context."
                 : tagged.length > 0
                     ? "Instrumented output captured. Review tagged data to confirm/reject hypotheses."
-                    : "No tagged output yet. Make sure the instrumented code path is executed.",
+                    : recent.total === 0 && !command
+                        ? "No output captured. Ask the user to run their app, then call debug_capture with a command like 'npm test' or 'curl localhost:3000' to collect output."
+                        : "No tagged output yet. Make sure the instrumented code path is executed.",
         });
     });
     // ━━━ TOOL 4: debug_verify ━━━
@@ -278,13 +286,26 @@ Idempotent — safe to call multiple times. Files are restored to their pre-inst
         if (diagnosis && session.problem) {
             const errorCap = session.captures.find((c) => c.data?.type === "investigation");
             const errorData = errorCap?.data;
-            // Merge instrumented files + rootCause files (logic bugs may have no instrumentation)
+            // Merge ALL file sources: instrumented + rootCause + investigated hint files
             const filesSet = new Set(session.instrumentation.map((i) => basename(i.filePath)));
             const rc = rootCause;
             if (rc?.errorFile)
-                filesSet.add(basename(rc.errorFile));
+                filesSet.add(rc.errorFile);
             if (rc?.causeFile)
-                filesSet.add(basename(rc.causeFile));
+                filesSet.add(rc.causeFile);
+            // Also include files from investigation captures (hint files + source files)
+            for (const cap of session.captures) {
+                const d = cap.data;
+                if (d?.type === "investigation") {
+                    for (const key of ["hintFiles", "sourceFiles"]) {
+                        if (Array.isArray(d[key])) {
+                            for (const f of d[key])
+                                if (typeof f === "string")
+                                    filesSet.add(f);
+                        }
+                    }
+                }
+            }
             remember(cwd, {
                 id: session.id,
                 timestamp: new Date().toISOString(),
