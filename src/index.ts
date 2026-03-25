@@ -242,34 +242,39 @@ function initCommand(cwd: string): void {
   writeFileSync(rulesPath, `# debug-toolkit — activation rules
 
 ## TRIGGER: Any error, failure, or bug
+When you encounter ANY of these, call debug_investigate BEFORE reading code manually:
+- Stack trace → debug_investigate({ error })
+- Test failure → debug_investigate({ error })
+- "Wrong output" / visual bug → debug_investigate({ error, files: [...] })
+- Bug report → debug_investigate({ error, files: [...] })
 
-When you encounter ANY of these, call \`debug_investigate\` BEFORE reading code manually:
+Note: The toolkit auto-triages errors. Trivial errors (missing imports, syntax errors)
+get a fast-path response with a fix hint. Complex errors get the full investigation.
 
-| Trigger | Action |
-|---------|--------|
-| Stack trace or error output | \`debug_investigate({ error: "<paste stack trace>" })\` |
-| Test failure | \`debug_investigate({ error: "<test output>" })\` |
-| "Wrong output" / "doesn't match" / visual bug | \`debug_investigate({ error: "<description>", files: ["src/..."] })\` |
-| User reports a bug | \`debug_investigate({ error: "<user's description>", files: ["likely files"] })\` |
+## SKIP toolkit for:
+- Syntax errors you can already see in the editor
+- Single-character typos with obvious fixes
+- Errors where the user already pasted the full context and fix is obvious
+
+## Use debug_recall (not full investigate) when:
+- The error is clear but might be recurring
+- You want to check if this was solved before
 
 ## TRIGGER: After fixing any bug
+The toolkit auto-saves to memory when debug_verify passes.
+Only call debug_cleanup if you need to:
+- Remove debug instrumentation from source files
+- Add a custom diagnosis or rootCause chain
 
-ALWAYS call \`debug_cleanup\` with:
-- \`diagnosis\`: one-line root cause
-- \`rootCause\`: \`{ trigger, errorFile, causeFile, fixDescription }\`
+## TRIGGER: Before claiming fix works
+ALWAYS call debug_verify({ command: "npm test" })
 
-This saves the diagnosis for future sessions. Skipping this wastes the work.
-
-## TRIGGER: Before claiming a fix works
-
-ALWAYS call \`debug_verify({ command: "npm test" })\` or equivalent.
-Never say "the fix works" without verification output.
+## TRIGGER: Periodically check for patterns
+Call debug_patterns to see recurring issues and preventive suggestions.
 
 ## WHY
-
-\`debug_investigate\` returns error classification, source code, git diff, environment, AND past solutions — all in one call. Manually reading files with Read/Grep gives you less context and takes more turns.
-
-The debug memory system learns from every session. The more you use it, the faster future debugging becomes.
+debug_investigate returns error classification, source code, git diff, environment,
+AND past solutions in one call. Trivial errors get fast-path responses in <100ms.
 `);
   success(`Activation rules ${sym.arrow} ${rulesPath}`);
 
