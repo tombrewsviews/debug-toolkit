@@ -13,6 +13,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { computeConfidence, CONFIDENCE_THRESHOLD } from "./confidence.js";
 
 // ━━━ Types ━━━
 
@@ -29,6 +30,10 @@ export interface MemoryEntry {
   gitSha: string | null;
   // Causal chain: what caused the error and what fixed it
   rootCause: CausalLink | null;
+  timesRecalled: number;
+  timesUsed: number;
+  archived: boolean;
+  source?: "local" | "external";
 }
 
 export interface CausalLink {
@@ -242,6 +247,11 @@ function loadStore(cwd: string): MemoryStore {
       if (e.rootCause === undefined) (e as MemoryEntry).rootCause = null;
     }
     store.version = 2;
+    for (const e of store.entries) {
+      if ((e as any).timesRecalled === undefined) (e as any).timesRecalled = 0;
+      if ((e as any).timesUsed === undefined) (e as any).timesUsed = 0;
+      if ((e as any).archived === undefined) (e as any).archived = false;
+    }
     return store;
   } catch {
     return { version: 2, entries: [] };
@@ -273,8 +283,9 @@ function tokenize(text: string): string[] {
  */
 export function remember(
   cwd: string,
-  entry: Omit<MemoryEntry, "keywords" | "gitSha" | "rootCause"> & {
+  entry: Omit<MemoryEntry, "keywords" | "gitSha" | "rootCause" | "timesRecalled" | "timesUsed" | "archived" | "source"> & {
     rootCause?: CausalLink | null;
+    source?: "local" | "external";
   },
 ): MemoryEntry {
   const store = loadStore(cwd);
@@ -292,6 +303,9 @@ export function remember(
     keywords,
     gitSha: getGitSha(cwd),
     rootCause: entry.rootCause ?? null,
+    timesRecalled: 0,
+    timesUsed: 0,
+    archived: false,
   };
 
   store.entries = store.entries.filter((e) => e.id !== full.id);
@@ -307,44 +321,64 @@ export function remember(
 
 /**
  * Search past debug sessions for similar errors.
- * Returns matches ranked by relevance, with staleness info and causal chains.
+ * Returns matches ranked by confidence * relevance, with staleness info and causal chains.
  */
 export function recall(
   cwd: string,
   query: string,
   limit = 5,
-): Array<MemoryEntry & { relevance: number; staleness: StalenessInfo }> {
+): Array<MemoryEntry & { relevance: number; staleness: StalenessInfo; confidence: number }> {
   const store = loadStore(cwd);
   if (store.entries.length === 0) return [];
 
   const queryTokens = tokenize(query);
   if (queryTokens.length === 0) return [];
 
-  const scored = store.entries.map((entry) => {
-    let hits = 0;
-    for (const qt of queryTokens) {
-      for (const ek of entry.keywords) {
-        if (ek.includes(qt) || qt.includes(ek)) {
-          hits++;
-          break;
+  const now = Date.now();
+  const scored = store.entries
+    .filter((entry) => !entry.archived)
+    .map((entry) => {
+      let hits = 0;
+      for (const qt of queryTokens) {
+        for (const ek of entry.keywords) {
+          if (ek.includes(qt) || qt.includes(ek)) {
+            hits++;
+            break;
+          }
         }
       }
-    }
-    return {
-      ...entry,
-      relevance: hits / queryTokens.length,
-      staleness: checkStaleness(cwd, entry),
-    };
-  });
+      const relevance = hits / queryTokens.length;
+      const staleness = checkStaleness(cwd, entry);
+      const ageInDays = (now - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+      const confidence = computeConfidence({
+        ageInDays,
+        fileDriftCommits: staleness.commitsBehind,
+        timesRecalled: entry.timesRecalled,
+        timesUsed: entry.timesUsed,
+      });
+      return { ...entry, relevance, staleness, confidence };
+    });
 
-  return scored
+  const results = scored
     .filter((e) => e.relevance > 0.2)
     .sort((a, b) => {
-      // Prefer fresh over stale, then by relevance
-      if (a.staleness.stale !== b.staleness.stale) return a.staleness.stale ? 1 : -1;
-      return b.relevance - a.relevance;
+      // Sort by combined confidence * relevance score
+      return (b.confidence * b.relevance) - (a.confidence * a.relevance);
     })
     .slice(0, limit);
+
+  // Increment timesRecalled for matched entries and save
+  if (results.length > 0) {
+    const resultIds = new Set(results.map((r) => r.id));
+    for (const entry of store.entries) {
+      if (resultIds.has(entry.id)) {
+        entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+      }
+    }
+    saveStore(cwd, store);
+  }
+
+  return results;
 }
 
 /**
