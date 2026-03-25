@@ -17,10 +17,42 @@ export interface InstrumentationRecord {
 export interface Capture {
     id: string;
     timestamp: string;
-    source: "terminal" | "browser-console" | "browser-network" | "browser-error" | "environment" | "tauri-log";
+    source: "terminal" | "browser-console" | "browser-network" | "browser-error" | "environment" | "tauri-log" | "build-error" | "visual" | "perf";
     markerTag: string | null;
     data: unknown;
     hypothesisId: string | null;
+}
+export interface ScreenshotRecord {
+    id: string;
+    timestamp: string;
+    tool: "ghost_screenshot" | "preview_screenshot" | "none";
+    reference: string;
+}
+export interface DomSnapshot {
+    timestamp: string;
+    tool: "ghost_read" | "preview_snapshot";
+    elements: Array<{
+        role: string;
+        name: string;
+        visible: boolean;
+    }>;
+}
+export interface VisualContext {
+    screenshots: ScreenshotRecord[];
+    domSnapshot: DomSnapshot | null;
+}
+export interface PerfSnapshot {
+    id: string;
+    timestamp: string;
+    url: string;
+    metrics: {
+        lcp: number | null;
+        cls: number | null;
+        inp: number | null;
+        tbt: number | null;
+        speedIndex: number | null;
+    };
+    phase: "before" | "after";
 }
 export interface FileSnapshot {
     filePath: string;
@@ -38,6 +70,8 @@ export interface DebugSession {
     captures: Capture[];
     snapshots: Record<string, FileSnapshot>;
     diagnosis: string | null;
+    visualContext: VisualContext | null;
+    perfSnapshots: PerfSnapshot[];
     _markerIndex: Record<string, string>;
 }
 export declare const MAX_FILE_SIZE: number;

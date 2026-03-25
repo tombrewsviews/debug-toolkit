@@ -15,18 +15,19 @@ import { basename } from "node:path";
 import { createSession, loadSession, saveSession, newHypothesisId, } from "./session.js";
 import { instrumentFile } from "./instrument.js";
 import { cleanupSession } from "./cleanup.js";
-import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs } from "./capture.js";
-import { investigate } from "./context.js";
+import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBuildErrors } from "./capture.js";
+import { investigate, isVisualError } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, memoryStats } from "./memory.js";
 import { METHODOLOGY } from "./methodology.js";
+import { runLighthouse, compareSnapshots } from "./perf.js";
 let cwd = process.cwd();
 export function setCwd(dir) { cwd = dir; }
 function text(data) {
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 export function createMcpServer() {
-    const server = new McpServer({ name: "debug-toolkit", version: "0.5.0" }, { capabilities: { tools: {}, resources: {} } });
+    const server = new McpServer({ name: "debug-toolkit", version: "0.6.0" }, { capabilities: { tools: {}, resources: {} } });
     // ━━━ RESOURCE: debug_methodology ━━━
     // Always-available debugging methodology. The "hot memory" tier.
     server.registerResource("debug_methodology", "debug://methodology", {
@@ -63,6 +64,22 @@ Start every debugging session with this tool.`,
         }
         // Run the investigation engine
         const result = investigate(errorText, cwd, hintFiles);
+        // Drain any accumulated build errors from the dev server
+        const buildErrors = drainBuildErrors();
+        // Persist build errors as captures on the session so they survive the response
+        for (const be of buildErrors) {
+            session.captures.push({
+                id: `bld_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                timestamp: new Date().toISOString(),
+                source: "build-error",
+                markerTag: null,
+                data: { tool: be.tool, file: be.file, line: be.line, code: be.code, message: be.message },
+                hypothesisId: null,
+            });
+        }
+        // Check if this is a visual error (for screenshot integration)
+        const sourceFiles = result.sourceCode.map((s) => s.relativePath);
+        const visualError = isVisualError(result.error.category, sourceFiles[0] ?? null, errorText);
         // Check memory for past solutions to similar errors
         const pastSolutions = recall(cwd, errorText, 3);
         // Store as capture (include hint files for file tracking in cleanup)
@@ -88,6 +105,14 @@ Start every debugging session with this tool.`,
             })),
             git: result.git,
             environment: result.environment,
+            buildErrors: buildErrors.length > 0 ? buildErrors.map((e) => ({
+                tool: e.tool,
+                file: e.file,
+                line: e.line,
+                code: e.code,
+                message: e.message,
+            })) : undefined,
+            visualError,
             userFrames: result.frames.filter((f) => f.isUserCode).map((f) => ({
                 fn: f.fn,
                 file: basename(f.file),
@@ -114,6 +139,26 @@ Start every debugging session with this tool.`,
             response.nextStep = result.error.suggestion
                 ? `Suggested fix: ${result.error.suggestion}`
                 : "Use debug_instrument to add logging, then debug_capture to see the output.";
+        }
+        // Adjust nextStep if build errors found
+        if (buildErrors.length > 0 && !response.nextStep) {
+            response.nextStep = `${buildErrors.length} build error(s) detected from dev server. Review them — they may be the root cause.`;
+        }
+        // Visual error advisory — tell agent to use visual tools
+        if (visualError) {
+            response.visualHint = {
+                isVisualBug: true,
+                message: "This appears to be a visual/CSS bug. Use ghost_screenshot or preview_screenshot to capture the current visual state, then attach findings to this session.",
+                suggestedActions: [
+                    "Take a screenshot with ghost_screenshot or preview_screenshot",
+                    "Capture DOM state with ghost_read or preview_snapshot for the affected element",
+                    "After fixing, take another screenshot to compare before/after",
+                ],
+            };
+            // Append to nextStep
+            if (typeof response.nextStep === "string") {
+                response.nextStep += " (Visual bug detected — screenshot recommended.)";
+            }
         }
         return text(response);
     });
@@ -256,7 +301,7 @@ Use this before cleanup to confirm the fix actually works.`,
             errors: errors.slice(0, 5).map((c) => c.data?.text),
             output: captures.slice(0, 10).map((c) => c.data?.text),
             nextStep: passed
-                ? "Fix verified! Use debug_cleanup to remove instrumentation and close the session."
+                ? "Fix verified! Use debug_cleanup to remove instrumentation and close the session. If this was a visual bug, take a screenshot to confirm the visual fix."
                 : "Fix failed. Review the errors above and try a different approach.",
         });
     });
@@ -409,6 +454,71 @@ Use this periodically to understand your project's debugging health.`,
                 : patterns.length > 0
                     ? `Top finding: ${patterns[0].message}`
                     : undefined,
+        });
+    });
+    // ━━━ TOOL: debug_perf ━━━
+    server.registerTool("debug_perf", {
+        title: "Performance Snapshot",
+        description: `Capture a Lighthouse performance snapshot for a URL.
+Returns Web Vitals: LCP, CLS, INP, Total Blocking Time, Speed Index.
+Call before and after a fix to compare performance impact.
+Requires Chrome installed. Gracefully skips if unavailable.`,
+        inputSchema: {
+            sessionId: z.string(),
+            url: z.string().describe("URL to audit (e.g., 'http://localhost:3000')"),
+            phase: z.enum(["before", "after"]).optional().describe("Label this snapshot as before or after a fix (default: before)"),
+        },
+    }, async ({ sessionId, url, phase }) => {
+        const session = loadSession(cwd, sessionId);
+        const snapshotPhase = phase ?? "before";
+        const metrics = await runLighthouse(url);
+        if (!metrics) {
+            return text({
+                error: "Lighthouse failed — Chrome may not be installed or the URL is unreachable.",
+                nextStep: "Ensure Chrome is installed and the dev server is running, then retry.",
+            });
+        }
+        const snapshot = {
+            id: `perf_${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            url,
+            metrics,
+            phase: snapshotPhase,
+        };
+        if (!session.perfSnapshots)
+            session.perfSnapshots = [];
+        session.perfSnapshots.push(snapshot);
+        saveSession(cwd, session);
+        // Compare with previous snapshot if this is an "after" snapshot
+        let comparison;
+        if (snapshotPhase === "after") {
+            const beforeSnapshot = session.perfSnapshots.find((s) => s.phase === "before");
+            if (beforeSnapshot) {
+                const diff = compareSnapshots(beforeSnapshot.metrics, metrics);
+                comparison = {
+                    lcpChange: diff.lcp !== null ? `${diff.lcp > 0 ? "+" : ""}${Math.round(diff.lcp)}ms` : null,
+                    clsChange: diff.cls !== null ? `${diff.cls > 0 ? "+" : ""}${diff.cls.toFixed(3)}` : null,
+                    tbtChange: diff.tbt !== null ? `${diff.tbt > 0 ? "+" : ""}${Math.round(diff.tbt)}ms` : null,
+                    improved: diff.improved,
+                };
+            }
+        }
+        return text({
+            phase: snapshotPhase,
+            url,
+            metrics: {
+                lcp: metrics.lcp !== null ? `${Math.round(metrics.lcp)}ms` : null,
+                cls: metrics.cls !== null ? metrics.cls.toFixed(3) : null,
+                inp: metrics.inp !== null ? `${Math.round(metrics.inp)}ms` : null,
+                tbt: metrics.tbt !== null ? `${Math.round(metrics.tbt)}ms` : null,
+                speedIndex: metrics.speedIndex !== null ? `${Math.round(metrics.speedIndex)}ms` : null,
+            },
+            comparison,
+            nextStep: snapshotPhase === "before"
+                ? "Apply your fix, then call debug_perf again with phase='after' to compare."
+                : comparison?.improved
+                    ? "Performance improved! Proceed with debug_verify to confirm the fix."
+                    : "Performance did not improve. Review the metrics and consider a different approach.",
         });
     });
     // ━━━ TOOL 9: debug_session ━━━

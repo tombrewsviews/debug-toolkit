@@ -48,6 +48,10 @@ export interface ErrorClassification {
     severity: "fatal" | "error" | "warning";
     suggestion: string;
 }
+/**
+ * Determine if an error is visual/CSS-related, warranting screenshot capture.
+ */
+export declare function isVisualError(category: string, file?: string | null, description?: string | null): boolean;
 export interface InvestigationResult {
     error: ErrorClassification;
     sourceCode: SourceSnippet[];

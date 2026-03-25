@@ -42,6 +42,8 @@ export function createSession(cwd, problem) {
         captures: [],
         snapshots: {},
         diagnosis: null,
+        visualContext: null,
+        perfSnapshots: [],
         _markerIndex: {},
     };
     saveSession(cwd, session);
