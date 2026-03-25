@@ -5,7 +5,7 @@
  * and compares before/after snapshots for regression detection.
  */
 
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
 export interface LighthouseMetrics {
   lcp: number | null;
@@ -72,15 +72,30 @@ export function compareSnapshots(before: LighthouseMetrics, after: LighthouseMet
  * Run Lighthouse against a URL and return extracted metrics.
  * Requires Chrome to be installed. Returns null on failure.
  */
-export async function runLighthouse(url: string, timeoutMs = 60_000): Promise<LighthouseMetrics | null> {
+export function runLighthouse(url: string, timeoutMs = 60_000): Promise<LighthouseMetrics | null> {
+  // Validate URL to prevent injection
   try {
-    const result = execSync(
-      `npx lighthouse "${url}" --output=json --quiet --chrome-flags="--headless --no-sandbox" --only-categories=performance 2>/dev/null`,
-      { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 },
-    );
-    const json = JSON.parse(result.toString());
-    return extractMetrics(json);
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return Promise.resolve(null);
   } catch {
-    return null;
+    return Promise.resolve(null);
   }
+
+  return new Promise((resolve) => {
+    execFile("npx", [
+      "lighthouse", url,
+      "--output=json",
+      "--quiet",
+      "--chrome-flags=--headless --no-sandbox",
+      "--only-categories=performance",
+    ], { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (error, stdout) => {
+      if (error) { resolve(null); return; }
+      try {
+        const json = JSON.parse(stdout);
+        resolve(extractMetrics(json));
+      } catch {
+        resolve(null);
+      }
+    });
+  });
 }

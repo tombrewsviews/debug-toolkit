@@ -98,6 +98,11 @@ export function importPack(
   packPath: string,
 ): { imported: number; total: number } {
   const pack = JSON.parse(readFileSync(packPath, "utf-8")) as KnowledgePack;
+
+  if (pack.version !== "1.0") {
+    throw new Error(`Unsupported pack version: ${pack.version}. Expected "1.0".`);
+  }
+
   const store = loadStore(cwd);
   const existingKeys = new Set(store.entries.map((e) => `${e.errorType}:${e.diagnosis}`));
 
@@ -106,6 +111,11 @@ export function importPack(
     const key = `${entry.errorType}:${entry.diagnosis}`;
     if (existingKeys.has(key)) continue;
 
+    // Sanitize file paths — reject path traversal attempts
+    const safeFiles = entry.files
+      .map(String)
+      .filter((f) => !f.includes("..") && !f.startsWith("/") && !f.startsWith("\\"));
+
     store.entries.push({
       id: `imp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       timestamp: new Date().toISOString(),
@@ -113,8 +123,8 @@ export function importPack(
       errorType: entry.errorType,
       category: entry.category,
       diagnosis: entry.diagnosis,
-      files: entry.files,
-      keywords: tokenize(`${entry.problem} ${entry.diagnosis} ${entry.files.join(" ")}`),
+      files: safeFiles,
+      keywords: tokenize(`${entry.problem} ${entry.diagnosis} ${safeFiles.join(" ")}`),
       gitSha: null,
       rootCause: entry.rootCause,
       timesRecalled: 0,
