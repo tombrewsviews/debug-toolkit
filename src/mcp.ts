@@ -23,6 +23,7 @@ import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, discove
 import { investigate, isVisualError } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, memoryStats, detectPatterns, type CausalLink } from "./memory.js";
+import { triageError } from "./triage.js";
 import { METHODOLOGY } from "./methodology.js";
 import { runLighthouse, compareSnapshots } from "./perf.js";
 import type { PerfSnapshot } from "./session.js";
@@ -80,6 +81,28 @@ Start every debugging session with this tool.`,
       session = createSession(cwd, problem ?? errorText.split("\n")[0]?.slice(0, 100) ?? "Debug session");
     }
 
+    // Triage: classify error complexity
+    const triage = triageError(errorText);
+
+    // Fast-path for trivial errors — skip full pipeline
+    if (triage.level === "trivial" && triage.fixHint) {
+      session.captures.push({
+        id: `inv_${Date.now()}`, timestamp: new Date().toISOString(),
+        source: "environment", markerTag: null,
+        data: { type: "investigation", triage: "trivial", error: triage.classification },
+        hypothesisId: null,
+      });
+      saveSession(cwd, session);
+
+      return text({
+        sessionId: session.id,
+        triage: "trivial",
+        error: triage.classification,
+        fixHint: triage.fixHint,
+        nextStep: `Trivial error: ${triage.fixHint} Apply the fix, then use debug_verify to confirm.`,
+      });
+    }
+
     // Run the investigation engine
     const result = investigate(errorText, cwd, hintFiles);
 
@@ -125,6 +148,7 @@ Start every debugging session with this tool.`,
 
     const response: Record<string, unknown> = {
       sessionId: session.id,
+      triage: triage.level,
       error: result.error,
       sourceCode: result.sourceCode.map((s) => ({
         file: s.relativePath,
