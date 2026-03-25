@@ -5,8 +5,8 @@
  * Import external packs into a project's memory.
  */
 
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { memoryPath, atomicWrite, tokenize } from "./utils.js";
 
 export interface KnowledgePack {
   version: "1.0";
@@ -31,10 +31,6 @@ interface MemoryStore {
   entries: Array<Record<string, unknown>>;
 }
 
-function memoryPath(cwd: string): string {
-  return join(cwd, ".debug", "memory.json");
-}
-
 function loadStore(cwd: string): MemoryStore {
   const p = memoryPath(cwd);
   if (!existsSync(p)) return { version: 2, entries: [] };
@@ -43,18 +39,6 @@ function loadStore(cwd: string): MemoryStore {
   } catch {
     return { version: 2, entries: [] };
   }
-}
-
-function atomicWrite(filePath: string, data: string): void {
-  const dir = dirname(filePath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const tmp = `${filePath}.tmp_${process.pid}`;
-  writeFileSync(tmp, data);
-  renameSync(tmp, filePath);
-}
-
-function tokenize(text: string): string[] {
-  return text.toLowerCase().replace(/[^a-z0-9_./\-]/g, " ").split(/\s+/).filter((w) => w.length > 2);
 }
 
 export function exportPack(

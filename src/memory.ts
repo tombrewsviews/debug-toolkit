@@ -11,9 +11,10 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { computeConfidence, CONFIDENCE_THRESHOLD, ARCHIVE_THRESHOLD } from "./confidence.js";
+import { memoryPath, atomicWrite, tokenize } from "./utils.js";
 
 // ━━━ Types ━━━
 
@@ -232,10 +233,6 @@ export function detectPatterns(cwd: string): PatternInsight[] {
 
 // ━━━ Paths & Persistence ━━━
 
-function memoryPath(cwd: string): string {
-  return join(cwd, ".debug", "memory.json");
-}
-
 function loadStore(cwd: string): MemoryStore {
   const p = memoryPath(cwd);
   if (!existsSync(p)) return { version: 2, entries: [] };
@@ -259,22 +256,7 @@ function loadStore(cwd: string): MemoryStore {
 }
 
 function saveStore(cwd: string, store: MemoryStore): void {
-  const p = memoryPath(cwd);
-  const dir = dirname(p);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const tmp = `${p}.tmp_${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(store, null, 2));
-  renameSync(tmp, p);
-}
-
-// ━━━ Tokenizer ━━━
-
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9_./\-]/g, " ")
-    .split(/\s+/)
-    .filter((w) => w.length > 2);
+  atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
 }
 
 // ━━━ Public API ━━━
