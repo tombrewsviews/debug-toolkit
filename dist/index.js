@@ -8,6 +8,7 @@ import treeKill from "tree-kill";
 import { pipeProcess } from "./capture.js";
 import { startProxy, detectPort } from "./proxy.js";
 import { setCwd, startMcpServer } from "./mcp.js";
+import { exportPack, importPack } from "./packs.js";
 import { installHook } from "./hook.js";
 import { cleanupFromManifest } from "./cleanup.js";
 import { banner, info, success, warn, error, dim, section, kv, ready, printHelp, sym, c } from "./cli.js";
@@ -15,7 +16,7 @@ import { banner, info, success, warn, error, dim, section, kv, ready, printHelp,
 function parseArgs(argv) {
     const args = argv.slice(2);
     const cmd = args[0] ?? "mcp"; // DEFAULT: pure MCP server (zero-config!)
-    if (["clean", "init", "demo", "help", "--help", "-h", "mcp"].includes(cmd)) {
+    if (["clean", "init", "demo", "help", "--help", "-h", "mcp", "export", "import"].includes(cmd)) {
         return { command: cmd.replace(/^-+/, ""), port: null, childCommand: [] };
     }
     if (cmd !== "serve")
@@ -359,6 +360,24 @@ async function main() {
         case "init":
             initCommand(cwd);
             break;
+        case "export": {
+            const outPath = process.argv[3] ?? join(cwd, ".debug", "knowledge-pack.json");
+            const filterArg = process.argv.find((a) => a.startsWith("--filter="));
+            const filter = filterArg?.split("=")[1];
+            const result = exportPack(cwd, outPath, { filter });
+            console.log(`Exported ${result.entries} entries to ${result.path}`);
+            break;
+        }
+        case "import": {
+            const packPath = process.argv[3];
+            if (!packPath) {
+                console.error("Usage: debug-toolkit import <pack-file>");
+                process.exit(1);
+            }
+            const result = importPack(cwd, packPath);
+            console.log(`Imported ${result.imported} new entries (${result.total} total)`);
+            break;
+        }
         case "clean": {
             banner();
             info("Scanning for debug markers...");

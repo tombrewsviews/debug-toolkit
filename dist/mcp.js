@@ -29,7 +29,7 @@ function text(data) {
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 export function createMcpServer() {
-    const server = new McpServer({ name: "debug-toolkit", version: "0.7.0" }, { capabilities: { tools: {}, resources: {} } });
+    const server = new McpServer({ name: "debug-toolkit", version: "0.8.0" }, { capabilities: { tools: {}, resources: {} } });
     // ━━━ RESOURCE: debug_methodology ━━━
     // Always-available debugging methodology. The "hot memory" tier.
     server.registerResource("debug_methodology", "debug://methodology", {
@@ -149,6 +149,7 @@ Start every debugging session with this tool.`,
                 diagnosis: s.diagnosis,
                 files: s.files,
                 relevance: Math.round(s.relevance * 100) + "%",
+                confidence: Math.round(s.confidence * 100) + "%",
                 stale: s.staleness.stale,
                 staleness: s.staleness.stale ? s.staleness.reason : undefined,
                 rootCause: s.rootCause ?? undefined,
@@ -156,6 +157,19 @@ Start every debugging session with this tool.`,
             response.nextStep = fresh.length > 0
                 ? `Found ${fresh.length} fresh past solution(s). Review them before investigating further.`
                 : `Found ${pastSolutions.length} past solution(s) but all are outdated (code changed). Investigate fresh.`;
+            // Proactive memory: surface high-confidence matches prominently
+            const highConfidence = pastSolutions.filter((s) => (s.confidence ?? 0) >= 0.8);
+            if (highConfidence.length > 0) {
+                const top = highConfidence[0];
+                response.proactiveSuggestion = {
+                    confidence: Math.round((top.confidence ?? 0) * 100) + "%",
+                    diagnosis: top.diagnosis,
+                    files: top.files,
+                    rootCause: top.rootCause ?? undefined,
+                    message: `High-confidence match (${Math.round((top.confidence ?? 0) * 100)}%): "${top.diagnosis}". This fix was verified before — try applying it directly.`,
+                };
+                response.nextStep = `Proactive suggestion: ${top.diagnosis}. Verify with debug_verify after applying.`;
+            }
         }
         else {
             response.nextStep = result.error.suggestion

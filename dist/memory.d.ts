@@ -20,6 +20,10 @@ export interface MemoryEntry {
     keywords: string[];
     gitSha: string | null;
     rootCause: CausalLink | null;
+    timesRecalled: number;
+    timesUsed: number;
+    archived: boolean;
+    source?: "local" | "external";
 }
 export interface CausalLink {
     trigger: string;
@@ -51,17 +55,26 @@ export declare function detectPatterns(cwd: string): PatternInsight[];
  * Save a completed debug session to memory.
  * Auto-captures the current git SHA for staleness tracking.
  */
-export declare function remember(cwd: string, entry: Omit<MemoryEntry, "keywords" | "gitSha" | "rootCause"> & {
+export declare function remember(cwd: string, entry: Omit<MemoryEntry, "keywords" | "gitSha" | "rootCause" | "timesRecalled" | "timesUsed" | "archived" | "source"> & {
     rootCause?: CausalLink | null;
+    source?: "local" | "external";
 }): MemoryEntry;
 /**
  * Search past debug sessions for similar errors.
- * Returns matches ranked by relevance, with staleness info and causal chains.
+ * Returns matches ranked by confidence * relevance, with staleness info and causal chains.
  */
 export declare function recall(cwd: string, query: string, limit?: number): Array<MemoryEntry & {
     relevance: number;
     staleness: StalenessInfo;
+    confidence: number;
 }>;
+/**
+ * Archive memories with confidence below threshold for 30+ days.
+ * Archived memories are excluded from auto-recall.
+ */
+export declare function archiveStaleMemories(cwd: string): {
+    archived: number;
+};
 /**
  * Get memory stats.
  */

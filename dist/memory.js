@@ -10,8 +10,9 @@
  * Zero native dependencies. Fast enough for hundreds of sessions.
  */
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
+import { computeConfidence, ARCHIVE_THRESHOLD } from "./confidence.js";
 // ━━━ Git helpers ━━━
 function getGitSha(cwd) {
     try {
@@ -188,6 +189,14 @@ function loadStore(cwd) {
                 e.rootCause = null;
         }
         store.version = 2;
+        for (const e of store.entries) {
+            if (e.timesRecalled === undefined)
+                e.timesRecalled = 0;
+            if (e.timesUsed === undefined)
+                e.timesUsed = 0;
+            if (e.archived === undefined)
+                e.archived = false;
+        }
         return store;
     }
     catch {
@@ -196,6 +205,9 @@ function loadStore(cwd) {
 }
 function saveStore(cwd, store) {
     const p = memoryPath(cwd);
+    const dir = dirname(p);
+    if (!existsSync(dir))
+        mkdirSync(dir, { recursive: true });
     const tmp = `${p}.tmp_${process.pid}`;
     writeFileSync(tmp, JSON.stringify(store, null, 2));
     renameSync(tmp, p);
@@ -227,6 +239,9 @@ export function remember(cwd, entry) {
         keywords,
         gitSha: getGitSha(cwd),
         rootCause: entry.rootCause ?? null,
+        timesRecalled: 0,
+        timesUsed: 0,
+        archived: false,
     };
     store.entries = store.entries.filter((e) => e.id !== full.id);
     store.entries.push(full);
@@ -238,7 +253,7 @@ export function remember(cwd, entry) {
 }
 /**
  * Search past debug sessions for similar errors.
- * Returns matches ranked by relevance, with staleness info and causal chains.
+ * Returns matches ranked by confidence * relevance, with staleness info and causal chains.
  */
 export function recall(cwd, query, limit = 5) {
     const store = loadStore(cwd);
@@ -247,7 +262,11 @@ export function recall(cwd, query, limit = 5) {
     const queryTokens = tokenize(query);
     if (queryTokens.length === 0)
         return [];
-    const scored = store.entries.map((entry) => {
+    const now = Date.now();
+    // Filter out archived entries from recall
+    const activeEntries = store.entries.filter((e) => !e.archived);
+    const scored = activeEntries
+        .map((entry) => {
         let hits = 0;
         for (const qt of queryTokens) {
             for (const ek of entry.keywords) {
@@ -257,21 +276,64 @@ export function recall(cwd, query, limit = 5) {
                 }
             }
         }
-        return {
-            ...entry,
-            relevance: hits / queryTokens.length,
-            staleness: checkStaleness(cwd, entry),
-        };
+        const relevance = hits / queryTokens.length;
+        const staleness = checkStaleness(cwd, entry);
+        const ageInDays = (now - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+        const confidence = computeConfidence({
+            ageInDays,
+            fileDriftCommits: staleness.commitsBehind,
+            timesRecalled: entry.timesRecalled,
+            timesUsed: entry.timesUsed,
+        });
+        return { ...entry, relevance, staleness, confidence };
     });
-    return scored
+    const results = scored
         .filter((e) => e.relevance > 0.2)
         .sort((a, b) => {
-        // Prefer fresh over stale, then by relevance
-        if (a.staleness.stale !== b.staleness.stale)
-            return a.staleness.stale ? 1 : -1;
-        return b.relevance - a.relevance;
+        // Sort by combined confidence * relevance score
+        return (b.confidence * b.relevance) - (a.confidence * a.relevance);
     })
         .slice(0, limit);
+    // Increment timesRecalled for matched entries and save
+    if (results.length > 0) {
+        const resultIds = new Set(results.map((r) => r.id));
+        for (const entry of store.entries) {
+            if (resultIds.has(entry.id)) {
+                entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+            }
+        }
+        saveStore(cwd, store);
+    }
+    return results;
+}
+/**
+ * Archive memories with confidence below threshold for 30+ days.
+ * Archived memories are excluded from auto-recall.
+ */
+export function archiveStaleMemories(cwd) {
+    const store = loadStore(cwd);
+    let archived = 0;
+    for (const entry of store.entries) {
+        if (entry.archived)
+            continue;
+        const ageInDays = (Date.now() - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+        if (ageInDays < 30)
+            continue;
+        const staleness = checkStaleness(cwd, entry);
+        const confidence = computeConfidence({
+            ageInDays,
+            fileDriftCommits: staleness.commitsBehind,
+            timesRecalled: entry.timesRecalled ?? 0,
+            timesUsed: entry.timesUsed ?? 0,
+        });
+        if (confidence < ARCHIVE_THRESHOLD) {
+            entry.archived = true;
+            archived++;
+        }
+    }
+    if (archived > 0)
+        saveStore(cwd, store);
+    return { archived };
 }
 /**
  * Get memory stats.
