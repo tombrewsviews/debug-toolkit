@@ -43,7 +43,9 @@ export function generateSuggestions(patterns) {
         }
         if (pattern.type === "hot_file") {
             const file = String(data.file ?? "");
-            const percentage = Number(data.percentage ?? 0);
+            const sessions = Number(data.sessions ?? 0);
+            const total = Number(data.total ?? 0);
+            const percentage = total > 0 ? Math.round(100 * sessions / total) : 0;
             suggestions.push({
                 category: "refactoring",
                 priority: percentage >= 30 ? "high" : "medium",
@@ -57,6 +59,14 @@ export function generateSuggestions(patterns) {
                 priority: "high",
                 action: `Add regression tests for the error pattern in ${String(data.file ?? "the affected file")} — this bug has recurred after being fixed.`,
                 rationale: `Regressions indicate the fix wasn't protected by tests.`,
+            });
+        }
+        if (pattern.type === "error_cluster") {
+            suggestions.push({
+                category: "testing",
+                priority: "medium",
+                action: `Add integration tests to catch cascading failures — ${Number(data.count ?? 0)} errors occurred within a short window.`,
+                rationale: `Error clusters often indicate cascading failures where one root cause triggers multiple symptoms.`,
             });
         }
     }

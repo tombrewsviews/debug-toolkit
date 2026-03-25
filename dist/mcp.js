@@ -177,8 +177,11 @@ Start every debugging session with this tool.`,
                 : "Use debug_instrument to add logging, then debug_capture to see the output.";
         }
         // Adjust nextStep if build errors found
-        if (buildErrors.length > 0 && !response.nextStep) {
-            response.nextStep = `${buildErrors.length} build error(s) detected from dev server. Review them — they may be the root cause.`;
+        if (buildErrors.length > 0) {
+            const buildMsg = `${buildErrors.length} build error(s) detected from dev server.`;
+            response.nextStep = typeof response.nextStep === "string"
+                ? `${buildMsg} ${response.nextStep}`
+                : buildMsg;
         }
         // Visual error advisory — tell agent to use visual tools
         if (visualError) {

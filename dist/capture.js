@@ -105,6 +105,7 @@ class RingBuffer {
         }
         this.count = 0;
         this.head = 0;
+        this.buf = new Array(this.cap); // Release references
         return result;
     }
     get length() { return this.count; }

@@ -10,9 +10,10 @@
  * Zero native dependencies. Fast enough for hundreds of sessions.
  */
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { computeConfidence, ARCHIVE_THRESHOLD } from "./confidence.js";
+import { memoryPath, atomicWrite, tokenize } from "./utils.js";
 // ━━━ Git helpers ━━━
 function getGitSha(cwd) {
     try {
@@ -172,9 +173,6 @@ export function detectPatterns(cwd) {
     return insights;
 }
 // ━━━ Paths & Persistence ━━━
-function memoryPath(cwd) {
-    return join(cwd, ".debug", "memory.json");
-}
 function loadStore(cwd) {
     const p = memoryPath(cwd);
     if (!existsSync(p))
@@ -204,21 +202,7 @@ function loadStore(cwd) {
     }
 }
 function saveStore(cwd, store) {
-    const p = memoryPath(cwd);
-    const dir = dirname(p);
-    if (!existsSync(dir))
-        mkdirSync(dir, { recursive: true });
-    const tmp = `${p}.tmp_${process.pid}`;
-    writeFileSync(tmp, JSON.stringify(store, null, 2));
-    renameSync(tmp, p);
-}
-// ━━━ Tokenizer ━━━
-function tokenize(text) {
-    return text
-        .toLowerCase()
-        .replace(/[^a-z0-9_./\-]/g, " ")
-        .split(/\s+/)
-        .filter((w) => w.length > 2);
+    atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
 }
 // ━━━ Public API ━━━
 /**
@@ -339,6 +323,8 @@ export function archiveStaleMemories(cwd) {
  * Get memory stats.
  */
 export function memoryStats(cwd) {
+    // Auto-archive stale entries on stats check
+    archiveStaleMemories(cwd);
     const store = loadStore(cwd);
     if (store.entries.length === 0) {
         return { entries: 0, oldestDate: null, newestDate: null, patterns: [] };

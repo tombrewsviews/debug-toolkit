@@ -4,11 +4,8 @@
  * Export project debug knowledge as shareable JSON packs.
  * Import external packs into a project's memory.
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
-function memoryPath(cwd) {
-    return join(cwd, ".debug", "memory.json");
-}
+import { readFileSync, existsSync } from "node:fs";
+import { memoryPath, atomicWrite, tokenize } from "./utils.js";
 function loadStore(cwd) {
     const p = memoryPath(cwd);
     if (!existsSync(p))
@@ -19,17 +16,6 @@ function loadStore(cwd) {
     catch {
         return { version: 2, entries: [] };
     }
-}
-function atomicWrite(filePath, data) {
-    const dir = dirname(filePath);
-    if (!existsSync(dir))
-        mkdirSync(dir, { recursive: true });
-    const tmp = `${filePath}.tmp_${process.pid}`;
-    writeFileSync(tmp, data);
-    renameSync(tmp, filePath);
-}
-function tokenize(text) {
-    return text.toLowerCase().replace(/[^a-z0-9_./\-]/g, " ").split(/\s+/).filter((w) => w.length > 2);
 }
 export function exportPack(cwd, outPath, options) {
     const store = loadStore(cwd);
@@ -59,6 +45,9 @@ export function exportPack(cwd, outPath, options) {
 }
 export function importPack(cwd, packPath) {
     const pack = JSON.parse(readFileSync(packPath, "utf-8"));
+    if (pack.version !== "1.0") {
+        throw new Error(`Unsupported pack version: ${pack.version}. Expected "1.0".`);
+    }
     const store = loadStore(cwd);
     const existingKeys = new Set(store.entries.map((e) => `${e.errorType}:${e.diagnosis}`));
     let imported = 0;
@@ -66,6 +55,10 @@ export function importPack(cwd, packPath) {
         const key = `${entry.errorType}:${entry.diagnosis}`;
         if (existingKeys.has(key))
             continue;
+        // Sanitize file paths — reject path traversal attempts
+        const safeFiles = entry.files
+            .map(String)
+            .filter((f) => !f.includes("..") && !f.startsWith("/") && !f.startsWith("\\"));
         store.entries.push({
             id: `imp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             timestamp: new Date().toISOString(),
@@ -73,8 +66,8 @@ export function importPack(cwd, packPath) {
             errorType: entry.errorType,
             category: entry.category,
             diagnosis: entry.diagnosis,
-            files: entry.files,
-            keywords: tokenize(`${entry.problem} ${entry.diagnosis} ${entry.files.join(" ")}`),
+            files: safeFiles,
+            keywords: tokenize(`${entry.problem} ${entry.diagnosis} ${safeFiles.join(" ")}`),
             gitSha: null,
             rootCause: entry.rootCause,
             timesRecalled: 0,
