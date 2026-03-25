@@ -85,6 +85,15 @@ export function generateSuggestions(patterns: PatternInput[]): Suggestion[] {
         rationale: `Regressions indicate the fix wasn't protected by tests.`,
       });
     }
+
+    if (pattern.type === "error_cluster") {
+      suggestions.push({
+        category: "testing",
+        priority: "medium",
+        action: `Add integration tests to catch cascading failures — ${Number(data.count ?? 0)} errors occurred within a short window.`,
+        rationale: `Error clusters often indicate cascading failures where one root cause triggers multiple symptoms.`,
+      });
+    }
   }
 
   return suggestions;
