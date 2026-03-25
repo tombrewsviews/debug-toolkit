@@ -316,27 +316,112 @@ debug-toolkit learns from every session:
 - **Atomic writes** — temp file + rename, no corruption on crash
 - **`.debug/` auto-gitignored**
 
+## Testing the New Features
+
+### Run the test suite
+
+```bash
+npm test                    # 37 tests across 9 files
+npm run test:watch          # watch mode
+```
+
+### Test Phase 1: Visual + Build Integration
+
+**Build error capture:**
+1. Run `npx debug-toolkit serve -- npm run dev` on a Vite project
+2. Introduce a CSS error (e.g., misplace an `@import`)
+3. Call `debug_investigate` — the `buildErrors` array should contain the parsed error without you pasting it
+
+**Visual bug detection:**
+1. Call `debug_investigate` with a CSS or layout error (e.g., `"the header looks broken on mobile"`, with `files: ["src/Header.css"]`)
+2. Response should include `visualError: true` and a `visualHint` block suggesting screenshot tools
+
+**Lighthouse performance:**
+1. Start a dev server on localhost
+2. Call `debug_perf` with `{ sessionId, url: "http://localhost:3000", phase: "before" }`
+3. Make a change, then call again with `phase: "after"` — response includes a `comparison` with metric diffs
+
+### Test Phase 2: Triage + Efficiency
+
+**Triage gate (trivial fast-path):**
+1. Call `debug_investigate` with a trivial error: `"ReferenceError: useState is not defined at App (src/App.tsx:5:10)"`
+2. Response should return `triage: "trivial"` with a `fixHint` and skip the full pipeline (no git context, no env scan)
+
+**Triage gate (complex full-path):**
+1. Call `debug_investigate` with `"the page is blank after login"`
+2. Response should return `triage: "complex"` with full investigation results
+
+**Auto-learning:**
+1. Run `debug_investigate` on an error, fix it, then call `debug_verify` with a passing command
+2. The response should say "auto-saved to memory"
+3. Call `debug_recall` with the same error — the auto-learned entry should appear
+
+**Preventive suggestions:**
+1. Create 3+ debug sessions with the same error type in the same file (use `debug_cleanup` with a diagnosis each time)
+2. Call `debug_patterns` — response should include a `suggestions` array with actionable recommendations
+
+### Test Phase 3: Memory Overhaul
+
+**Confidence scoring:**
+1. Create a memory entry via `debug_cleanup` with a diagnosis
+2. Call `debug_recall` — results now include a `confidence` percentage
+3. Recent entries with no file drift should score >80%
+
+**Proactive memory:**
+1. Build up a high-confidence memory entry (create, recall it, verify a fix using it)
+2. Call `debug_investigate` with the same error pattern
+3. Response should include `proactiveSuggestion` with the high-confidence match
+
+**Knowledge pack export/import:**
+```bash
+# In project A (has debug memory):
+npx debug-toolkit export ./my-knowledge.json
+
+# In project B (fresh):
+npx debug-toolkit import ./my-knowledge.json
+```
+Then call `debug_recall` in project B — imported entries should appear with `source: "external"`.
+
+**Memory archival:**
+1. Create entries, then simulate aging (modify the timestamp in `.debug/memory.json` to >30 days ago)
+2. Modify the referenced files so they have high drift
+3. Call `debug_recall` — archived entries should be excluded from results
+
+### End-to-end smoke test
+
+```bash
+npx debug-toolkit demo     # full workflow with real bug
+npm run build               # TypeScript compiles clean
+npm test                    # 37 tests pass
+```
+
 ## Architecture
 
-15 files, 3,451 lines of TypeScript. 4 npm dependencies.
+21 source files, ~5,000 lines of TypeScript. 4 runtime dependencies, 1 dev dependency (vitest).
 
 ```
 src/
-  mcp.ts          473 lines  — 8 tools + 1 resource + MCP server
-  context.ts      420 lines  — Investigation engine (stack parsing, source, git, env)
-  demo.ts         398 lines  — Self-contained interactive demo
-  memory.ts       369 lines  — Cross-session memory with staleness + patterns
-  capture.ts      276 lines  — Ring buffers, terminal pipe, Tauri log tailing
-  proxy.ts        200 lines  — HTTP proxy + HTML injection + WebSocket
-  index.ts        204 lines  — CLI entry point (mcp, serve, init, demo, clean)
-  security.ts     185 lines  — Path traversal, expression validation, redaction
-  session.ts      162 lines  — Data model, atomic persistence, marker index
-  injected.js     151 lines  — Browser console/network/error capture script
-  instrument.ts   140 lines  — Language-aware instrumentation (JS/TS/Py/Go/Rust)
-  cleanup.ts      126 lines  — Single-pass marker removal with verification
-  cli.ts          125 lines  — ANSI terminal UI
-  hook.ts         122 lines  — Git pre-commit hook
-  methodology.ts  100 lines  — Always-available debugging guide
+  mcp.ts           — 10 tools + 1 resource + MCP server
+  context.ts       — Investigation engine (stack parsing, source, git, env)
+  memory.ts        — Cross-session memory with confidence + staleness + patterns
+  capture.ts       — Ring buffers, terminal pipe, build error parsing, Tauri logs
+  demo.ts          — Self-contained interactive demo
+  proxy.ts         — HTTP proxy + HTML injection + WebSocket
+  index.ts         — CLI entry (mcp, serve, init, demo, clean, export, import)
+  security.ts      — Path traversal, expression validation, redaction
+  session.ts       — Data model, atomic persistence, visual + perf context
+  injected.js      — Browser console/network/error capture script
+  instrument.ts    — Language-aware instrumentation (JS/TS/Py/Go/Rust)
+  cleanup.ts       — Single-pass marker removal with verification
+  triage.ts        — Error complexity classification (trivial/medium/complex)
+  suggestions.ts   — Preventive suggestions from debug patterns
+  confidence.ts    — Memory confidence scoring (age, drift, usage)
+  packs.ts         — Knowledge pack export/import
+  adapters.ts      — MCP tool discovery (Ghost OS, Claude Preview)
+  perf.ts          — Lighthouse CLI runner + metric extraction
+  cli.ts           — ANSI terminal UI
+  hook.ts          — Git pre-commit hook
+  methodology.ts   — Always-available debugging guide
 ```
 
 ## License
