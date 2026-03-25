@@ -174,6 +174,23 @@ Start every debugging session with this tool.`,
       response.nextStep = `${buildErrors.length} build error(s) detected from dev server. Review them — they may be the root cause.`;
     }
 
+    // Visual error advisory — tell agent to use visual tools
+    if (visualError) {
+      response.visualHint = {
+        isVisualBug: true,
+        message: "This appears to be a visual/CSS bug. Use ghost_screenshot or preview_screenshot to capture the current visual state, then attach findings to this session.",
+        suggestedActions: [
+          "Take a screenshot with ghost_screenshot or preview_screenshot",
+          "Capture DOM state with ghost_read or preview_snapshot for the affected element",
+          "After fixing, take another screenshot to compare before/after",
+        ],
+      };
+      // Append to nextStep
+      if (typeof response.nextStep === "string") {
+        response.nextStep += " (Visual bug detected — screenshot recommended.)";
+      }
+    }
+
     return text(response);
   });
 
@@ -332,7 +349,7 @@ Use this before cleanup to confirm the fix actually works.`,
       errors: errors.slice(0, 5).map((c) => (c.data as Record<string, string>)?.text),
       output: captures.slice(0, 10).map((c) => (c.data as Record<string, string>)?.text),
       nextStep: passed
-        ? "Fix verified! Use debug_cleanup to remove instrumentation and close the session."
+        ? "Fix verified! Use debug_cleanup to remove instrumentation and close the session. If this was a visual bug, take a screenshot to confirm the visual fix."
         : "Fix failed. Review the errors above and try a different approach.",
     });
   });
