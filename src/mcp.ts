@@ -28,6 +28,9 @@ import { generateSuggestions } from "./suggestions.js";
 import { METHODOLOGY } from "./methodology.js";
 import { runLighthouse, compareSnapshots } from "./perf.js";
 import type { PerfSnapshot } from "./session.js";
+import { fitToBudget, estimateTokens } from "./budget.js";
+import { explainTriage, explainConfidence } from "./explain.js";
+import { recordOutcome, getTelemetry, getFixRateForError } from "./telemetry.js";
 
 let cwd = process.cwd();
 export function setCwd(dir: string): void { cwd = dir; }
@@ -133,6 +136,11 @@ Start every debugging session with this tool.`,
     // Check memory for past solutions to similar errors
     const pastSolutions = recall(cwd, errorText, 3);
 
+    // Track memory hit on session for telemetry
+    if (pastSolutions.length > 0) {
+      (session as any)._memoryHit = true;
+    }
+
     // Store as capture (include hint files for file tracking in cleanup)
     session.captures.push({
       id: `inv_${Date.now()}`, timestamp: new Date().toISOString(),
@@ -209,6 +217,15 @@ Start every debugging session with this tool.`,
         : "Use debug_instrument to add logging, then debug_capture to see the output.";
     }
 
+    // Add fix rate hint from telemetry
+    const errorType = result.error.type;
+    if (errorType) {
+      const fixRate = getFixRateForError(cwd, errorType);
+      if (fixRate !== null) {
+        response.telemetryHint = `Similar errors have been fixed ${Math.round(fixRate * 100)}% of the time.`;
+      }
+    }
+
     // Adjust nextStep if build errors found
     if (buildErrors.length > 0) {
       const buildMsg = `${buildErrors.length} build error(s) detected from dev server.`;
@@ -234,7 +251,18 @@ Start every debugging session with this tool.`,
       }
     }
 
-    return text(response);
+    // Add triage explanation
+    const userFrameCount = result.frames.filter((f) => f.isUserCode).length;
+    const isTrivialPattern = triage.level === "trivial";
+    response._triageExplanation = explainTriage(
+      triage.level,
+      triage.classification.type,
+      userFrameCount,
+      isTrivialPattern,
+    );
+
+    const budgeted = fitToBudget(response, { maxTokens: 4000 });
+    return { content: [{ type: "text", text: JSON.stringify(budgeted, null, 2) }] };
   });
 
   // ━━━ TOOL 2: debug_instrument ━━━
@@ -253,8 +281,9 @@ Supports JS/TS/Python/Go.`,
       lineNumber: z.number().describe("Insert AFTER this line (0-indexed)"),
       expression: z.string().describe("What to log (e.g., 'req.body', 'state.count')"),
       hypothesis: z.string().optional().describe("What you're testing (auto-creates hypothesis)"),
+      condition: z.string().optional().describe("Optional: only log when this condition is true (e.g., 'value === null', 'count > 100')"),
     },
-  }, async ({ sessionId, filePath, lineNumber, expression, hypothesis }) => {
+  }, async ({ sessionId, filePath, lineNumber, expression, hypothesis, condition }) => {
     const session = loadSession(cwd, sessionId);
 
     // Auto-create hypothesis if description provided
@@ -268,7 +297,7 @@ Supports JS/TS/Python/Go.`,
       saveSession(cwd, session);
     }
 
-    const r = instrumentFile({ cwd, session, filePath, lineNumber, expression, hypothesisId: hypId });
+    const r = instrumentFile({ cwd, session, filePath, lineNumber, expression, hypothesisId: hypId, condition });
 
     return text({
       markerTag: r.markerTag,
@@ -416,6 +445,27 @@ Use this before cleanup to confirm the fix actually works.`,
       });
     }
 
+    // Record telemetry outcome
+    if (session.problem) {
+      const errorCap = session.captures.find((c) =>
+        (c.data as Record<string, unknown>)?.type === "investigation",
+      );
+      const errorData = errorCap?.data as Record<string, Record<string, string>> | undefined;
+      recordOutcome(cwd, {
+        sessionId: session.id,
+        errorType: errorData?.error?.type ?? "unknown",
+        category: errorData?.error?.category ?? "unknown",
+        files: session.instrumentation.map((i) => basename(i.filePath)),
+        triageLevel: (session as any)._triageLevel ?? "complex",
+        outcome: passed ? "fixed" : "workaround",
+        durationMs: Date.now() - new Date(session.createdAt).getTime(),
+        toolsUsed: ["investigate", "instrument", "capture", "verify"],
+        memoryHit: false,
+        memoryApplied: false,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     return text({
       passed,
       exitCode,
@@ -508,8 +558,9 @@ the same error may have been solved before in this project.`,
     inputSchema: {
       query: z.string().describe("Error message, error type, or description to search for"),
       limit: z.number().optional().describe("Max results (default: 5)"),
+      explain: z.boolean().optional().describe("Include confidence explanations for each result"),
     },
-  }, async ({ query, limit }) => {
+  }, async ({ query, limit, explain }) => {
     const matches = recall(cwd, query, limit ?? 5);
     const stats = memoryStats(cwd);
 
@@ -526,17 +577,29 @@ the same error may have been solved before in this project.`,
     const staleCount = matches.filter((m) => m.staleness.stale).length;
 
     return text({
-      matches: matches.map((m) => ({
-        problem: m.problem,
-        errorType: m.errorType,
-        diagnosis: m.diagnosis,
-        files: m.files,
-        relevance: Math.round(m.relevance * 100) + "%",
-        date: m.timestamp,
-        stale: m.staleness.stale,
-        staleness: m.staleness.stale ? m.staleness.reason : undefined,
-        rootCause: m.rootCause ?? undefined,
-      })),
+      matches: matches.map((m) => {
+        const entry: Record<string, unknown> = {
+          problem: m.problem,
+          errorType: m.errorType,
+          diagnosis: m.diagnosis,
+          files: m.files,
+          relevance: Math.round(m.relevance * 100) + "%",
+          date: m.timestamp,
+          stale: m.staleness.stale,
+          staleness: m.staleness.stale ? m.staleness.reason : undefined,
+          rootCause: m.rootCause ?? undefined,
+        };
+        if (explain) {
+          const ageInDays = (Date.now() - new Date(m.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+          entry._explanation = explainConfidence({
+            ageInDays,
+            fileDriftCommits: m.staleness.commitsBehind,
+            timesRecalled: m.timesRecalled,
+            timesUsed: m.timesUsed,
+          });
+        }
+        return entry;
+      }),
       message: `Found ${matches.length} past solution(s).${staleCount > 0 ? ` ${staleCount} may be outdated (code has changed since).` : ""} Top match: "${matches[0].diagnosis}"`,
       nextStep: staleCount === matches.length
         ? "All past solutions are outdated — code has changed. Investigate fresh with debug_investigate."
@@ -557,6 +620,7 @@ Use this periodically to understand your project's debugging health.`,
     inputSchema: {},
   }, async () => {
     const stats = memoryStats(cwd);
+    const telemetry = getTelemetry(cwd);
 
     if (stats.entries === 0) {
       return text({
@@ -569,6 +633,19 @@ Use this periodically to understand your project's debugging health.`,
     const suggestions = generateSuggestions(patterns);
     const critical = patterns.filter((p) => p.severity === "critical");
     const warnings = patterns.filter((p) => p.severity === "warning");
+
+    const telemetrySection = telemetry.aggregates.totalSessions > 0 ? {
+      totalSessions: telemetry.aggregates.totalSessions,
+      fixRate: `${Math.round(telemetry.aggregates.fixRate * 100)}%`,
+      avgDurationMs: Math.round(telemetry.aggregates.avgDurationMs),
+      memoryHitRate: `${Math.round(telemetry.aggregates.memoryHitRate * 100)}%`,
+      memoryApplyRate: `${Math.round(telemetry.aggregates.memoryApplyRate * 100)}%`,
+      topErrors: telemetry.aggregates.topErrors.slice(0, 5).map((e) => ({
+        errorType: e.errorType,
+        count: e.count,
+        fixRate: `${Math.round(e.fixRate * 100)}%`,
+      })),
+    } : undefined;
 
     return text({
       memoryEntries: stats.entries,
@@ -584,6 +661,7 @@ Use this periodically to understand your project's debugging health.`,
         action: s.action,
         rationale: s.rationale,
       })) : undefined,
+      telemetry: telemetrySection,
       summary: patterns.length === 0
         ? `${stats.entries} sessions analyzed. No concerning patterns detected.`
         : `${patterns.length} pattern(s) found: ${critical.length} critical, ${warnings.length} warnings.`,

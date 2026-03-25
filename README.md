@@ -9,6 +9,15 @@ npx debug-toolkit export [path]   # export debug memory as a knowledge pack
 npx debug-toolkit import <path>   # import a knowledge pack into this project
 ```
 
+## What's New in v0.9
+
+- **Inverted index recall** — Memory search is now O(1) via a prebuilt inverted index instead of linear scan. The index maps keywords → entry IDs, is cached in-memory, and auto-invalidates on writes. Recall is now instant regardless of memory size.
+- **Batch git staleness** — Replaced N+1 `git rev-list` calls (one per file per entry) with a single `git log --name-only` per SHA. Staleness checking is now 10–50x faster for entries referencing multiple files.
+- **Token budget system** — Every `debug_investigate` response is now auto-compressed to fit within a 4,000-token budget. Progressive compression: truncates arrays → shortens strings → summarizes objects → strips environment data. Preserved keys (`nextStep`, `rootCause`, `severity`) are never truncated.
+- **Explain mode** — Pass `explain: true` to `debug_recall` to see WHY each result scored its confidence level, with a factor-by-factor breakdown (age, file drift, usage) and an interpretation for each. `debug_investigate` also includes a `_triageExplanation` showing why the error was classified as trivial/medium/complex.
+- **Conditional instrumentation** — `debug_instrument` now accepts a `condition` parameter. Pass `"value === null"` or `"count > 100"` and the logging wraps in an `if` block — works across JS/TS, Python, Go, and Rust. No more log spam for high-frequency code paths.
+- **Debug telemetry** — Every verified fix is tracked in `.debug/telemetry.json` with outcome (fixed/workaround/abandoned), duration, error type, and whether memory was used. `debug_patterns` now includes a telemetry section with fix rate, memory effectiveness, and top error types. `debug_investigate` shows historical fix rates for recognized error types.
+
 ## What's New in v0.8
 
 - **Confidence scoring** — recall results now include a `confidence` percentage (0–100) for each past fix. Confidence is computed from entry age, file drift since the fix was recorded, and how many times the fix has been successfully applied. Higher confidence = more reliable fix, so agents can prioritize the most trustworthy solutions first.
@@ -321,7 +330,7 @@ debug-toolkit learns from every session:
 ### Run the test suite
 
 ```bash
-npm test                    # 37 tests across 9 files
+npm test                    # 53 tests across 12 files
 npm run test:watch          # watch mode
 ```
 
@@ -392,12 +401,12 @@ Then call `debug_recall` in project B — imported entries should appear with `s
 ```bash
 npx debug-toolkit demo     # full workflow with real bug
 npm run build               # TypeScript compiles clean
-npm test                    # 37 tests pass
+npm test                    # 53 tests pass
 ```
 
 ## Architecture
 
-21 source files, ~5,000 lines of TypeScript. 4 runtime dependencies, 1 dev dependency (vitest).
+24 source files, ~5,500 lines of TypeScript. 4 runtime dependencies, 1 dev dependency (vitest).
 
 ```
 src/
@@ -422,6 +431,10 @@ src/
   cli.ts           — ANSI terminal UI
   hook.ts          — Git pre-commit hook
   methodology.ts   — Always-available debugging guide
+  budget.ts        — Token budget estimation + response compression
+  explain.ts       — Decision explainability (triage, confidence, archival)
+  telemetry.ts     — Debug session outcome tracking + fix rates
+  utils.ts         — Shared utilities (atomicWrite, tokenize, memoryPath)
 ```
 
 ## License

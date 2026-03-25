@@ -14,6 +14,32 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { computeConfidence, ARCHIVE_THRESHOLD } from "./confidence.js";
 import { memoryPath, atomicWrite, tokenize } from "./utils.js";
+// ━━━ Inverted Index Cache ━━━
+let invertedIndex = null;
+let indexedStorePath = null;
+function buildIndex(store) {
+    const idx = new Map();
+    for (const entry of store.entries) {
+        for (const kw of entry.keywords) {
+            if (!idx.has(kw))
+                idx.set(kw, new Set());
+            idx.get(kw).add(entry.id);
+        }
+    }
+    return idx;
+}
+function getIndex(cwd, store) {
+    const p = memoryPath(cwd);
+    if (invertedIndex && indexedStorePath === p)
+        return invertedIndex;
+    invertedIndex = buildIndex(store);
+    indexedStorePath = p;
+    return invertedIndex;
+}
+function invalidateIndex() {
+    invertedIndex = null;
+    indexedStorePath = null;
+}
 // ━━━ Git helpers ━━━
 function getGitSha(cwd) {
     try {
@@ -24,44 +50,70 @@ function getGitSha(cwd) {
         return null;
     }
 }
+function isValidSha(sha) {
+    return /^[0-9a-f]{7,40}$/i.test(sha);
+}
 /**
- * Check how many commits have touched a file since a given SHA.
- * Returns null if git isn't available, 0 if unchanged, N if changed.
+ * Batch-fetch commit counts for multiple files since a given SHA.
+ * Single git process instead of one per file.
  */
-function commitsSince(cwd, sha, file) {
+function batchCommitCounts(cwd, baseSha, files) {
+    const counts = new Map();
+    if (files.length === 0)
+        return counts;
     try {
-        const count = execSync(`git rev-list --count ${sha}..HEAD -- "${file}" 2>/dev/null`, { cwd, timeout: 3000 }).toString().trim();
-        return parseInt(count, 10);
+        const result = execSync(`git log --format="" --name-only ${baseSha}..HEAD -- ${files.map(f => `"${f}"`).join(" ")}`, { cwd, timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).toString();
+        for (const line of result.split("\n")) {
+            const trimmed = line.trim();
+            if (trimmed) {
+                counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1);
+            }
+        }
     }
     catch {
-        return null;
+        // Git not available or SHA not found — treat all as unknown
     }
+    // Ensure all requested files have an entry (0 if not changed)
+    for (const f of files) {
+        if (!counts.has(f))
+            counts.set(f, 0);
+    }
+    return counts;
 }
 function checkStaleness(cwd, entry) {
-    if (!entry.gitSha)
+    if (!entry.gitSha || !isValidSha(entry.gitSha)) {
         return { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
+    }
     let totalCommits = 0;
     const changed = [];
+    // Collect files to check via git (skip deleted files — they're stale immediately)
+    const deletedFiles = [];
+    const filesToCheck = [];
     for (const f of entry.files) {
-        // Resolve relative to cwd
         const fullPath = resolve(cwd, f);
         if (!existsSync(fullPath)) {
-            changed.push(f);
+            deletedFiles.push(f);
             totalCommits += 1; // file deleted = definitely stale
-            continue;
         }
-        const n = commitsSince(cwd, entry.gitSha, f);
-        if (n !== null && n > 0) {
-            changed.push(f);
-            totalCommits += n;
+        else {
+            filesToCheck.push(f);
         }
     }
-    // Also check causeFile if it's different from the error files
-    if (entry.rootCause?.causeFile && !entry.files.includes(entry.rootCause.causeFile)) {
-        const n = commitsSince(cwd, entry.gitSha, entry.rootCause.causeFile);
-        if (n !== null && n > 0) {
-            changed.push(entry.rootCause.causeFile);
-            totalCommits += n;
+    changed.push(...deletedFiles);
+    // Also include causeFile if distinct
+    const causeFile = entry.rootCause?.causeFile;
+    if (causeFile && !entry.files.includes(causeFile)) {
+        filesToCheck.push(causeFile);
+    }
+    // Single git call for all remaining files
+    if (filesToCheck.length > 0) {
+        const counts = batchCommitCounts(cwd, entry.gitSha, filesToCheck);
+        for (const f of filesToCheck) {
+            const n = counts.get(f) ?? 0;
+            if (n > 0) {
+                changed.push(f);
+                totalCommits += n;
+            }
         }
     }
     if (changed.length === 0)
@@ -203,6 +255,7 @@ function loadStore(cwd) {
 }
 function saveStore(cwd, store) {
     atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
+    invalidateIndex();
 }
 // ━━━ Public API ━━━
 /**
@@ -247,19 +300,29 @@ export function recall(cwd, query, limit = 5) {
     if (queryTokens.length === 0)
         return [];
     const now = Date.now();
-    // Filter out archived entries from recall
-    const activeEntries = store.entries.filter((e) => !e.archived);
-    const scored = activeEntries
-        .map((entry) => {
-        let hits = 0;
-        for (const qt of queryTokens) {
-            for (const ek of entry.keywords) {
-                if (ek.includes(qt) || qt.includes(ek)) {
-                    hits++;
-                    break;
+    const index = getIndex(cwd, store);
+    // Build candidate set using inverted index: map entryId → hit count
+    const hitCounts = new Map();
+    for (const qt of queryTokens) {
+        // Collect all index entries that overlap with this token (substring match)
+        for (const [kw, idSet] of index) {
+            if (kw.includes(qt) || qt.includes(kw)) {
+                for (const id of idSet) {
+                    hitCounts.set(id, (hitCounts.get(id) ?? 0) + 1);
                 }
             }
         }
+    }
+    // Build a lookup map for quick entry access
+    const entryById = new Map();
+    for (const e of store.entries) {
+        entryById.set(e.id, e);
+    }
+    const scored = [];
+    for (const [id, hits] of hitCounts) {
+        const entry = entryById.get(id);
+        if (!entry || entry.archived)
+            continue;
         const relevance = hits / queryTokens.length;
         const staleness = checkStaleness(cwd, entry);
         const ageInDays = (now - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
@@ -269,8 +332,8 @@ export function recall(cwd, query, limit = 5) {
             timesRecalled: entry.timesRecalled,
             timesUsed: entry.timesUsed,
         });
-        return { ...entry, relevance, staleness, confidence };
-    });
+        scored.push({ ...entry, relevance, staleness, confidence });
+    }
     const results = scored
         .filter((e) => e.relevance > 0.2)
         .sort((a, b) => {

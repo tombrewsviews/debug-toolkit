@@ -458,3 +458,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => { error(String(e)); process.exit(1); });
+
+export { fitToBudget, estimateTokens } from "./budget.js";
+export { explainTriage, explainConfidence, explainArchival } from "./explain.js";
+export { recordOutcome, getTelemetry, getFixRateForError } from "./telemetry.js";

@@ -6,6 +6,7 @@ export interface InstrumentOptions {
     lineNumber: number;
     expression: string;
     hypothesisId?: string;
+    condition?: string;
 }
 export interface InstrumentResult {
     record: InstrumentationRecord;

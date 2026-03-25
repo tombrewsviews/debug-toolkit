@@ -24,23 +24,38 @@ function getIndentation(line) {
     return match ? match[1] : "";
 }
 // --- Marker generation ---
-function wrapInstrumentation(lang, tag, expression, indent) {
+function wrapInstrumentation(lang, tag, expression, indent, condition) {
     switch (lang) {
         case "js":
         case "ts":
+            if (condition) {
+                return `${indent}if (${condition}) console.log("[${tag}]", ${expression});`;
+            }
             return `${indent}/* __DBG_START_${tag}__ */ console.log("[${tag}]", ${expression}); /* __DBG_END_${tag}__ */`;
         case "py":
+            if (condition) {
+                return `${indent}if ${condition}:\n${indent}    print(f"[${tag}] {${expression}}")`;
+            }
             return `${indent}# __DBG_START_${tag}__\n${indent}print(f"[${tag}] {${expression}}")\n${indent}# __DBG_END_${tag}__`;
         case "go":
+            if (condition) {
+                return `${indent}if ${condition} {\n${indent}\tfmt.Printf("[${tag}] %v\\n", ${expression})\n${indent}}`;
+            }
             return `${indent}/* __DBG_START_${tag}__ */ fmt.Printf("[${tag}] %v\\n", ${expression}) /* __DBG_END_${tag}__ */`;
         case "rs":
+            if (condition) {
+                return `${indent}if ${condition} {\n${indent}    eprintln!("[${tag}] {:?}", ${expression});\n${indent}}`;
+            }
             return `${indent}/* __DBG_START_${tag}__ */ eprintln!("[${tag}] {:?}", ${expression}); /* __DBG_END_${tag}__ */`;
         default:
+            if (condition) {
+                return `${indent}if (${condition}) console.log("[${tag}]", ${expression});`;
+            }
             return `${indent}/* __DBG_START_${tag}__ */ console.log("[${tag}]", ${expression}); /* __DBG_END_${tag}__ */`;
     }
 }
 export function instrumentFile(opts) {
-    const { cwd, session, filePath, lineNumber, expression, hypothesisId } = opts;
+    const { cwd, session, filePath, lineNumber, expression, hypothesisId, condition } = opts;
     // Security: validate file path and expression
     const safePath = validateFilePath(filePath, cwd);
     const safeExpression = validateExpression(expression);
@@ -58,7 +73,7 @@ export function instrumentFile(opts) {
     const targetLine = lines[insertAt] ?? lines[insertAt - 1] ?? "";
     const indent = getIndentation(targetLine);
     const tag = nextMarkerTag();
-    const insertedCode = wrapInstrumentation(lang, tag, safeExpression, indent);
+    const insertedCode = wrapInstrumentation(lang, tag, safeExpression, indent, condition);
     // Insert the instrumentation lines
     const instrumentLines = insertedCode.split("\n");
     lines.splice(insertAt, 0, ...instrumentLines);
