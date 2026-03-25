@@ -320,7 +320,7 @@ export interface ErrorClassification {
   suggestion: string;
 }
 
-function classifyError(raw: string): ErrorClassification {
+export function classifyError(raw: string): ErrorClassification {
   const r: ErrorClassification = {
     type: "Unknown",
     summary: raw.split("\n")[0]?.slice(0, 200) ?? "",
