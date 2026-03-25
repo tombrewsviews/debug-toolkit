@@ -19,8 +19,8 @@ import {
 } from "./session.js";
 import { instrumentFile } from "./instrument.js";
 import { cleanupSession } from "./cleanup.js";
-import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, discoverTauriLogs } from "./capture.js";
-import { investigate } from "./context.js";
+import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, discoverTauriLogs, drainBuildErrors } from "./capture.js";
+import { investigate, isVisualError } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, memoryStats, detectPatterns, type CausalLink } from "./memory.js";
 import { METHODOLOGY } from "./methodology.js";
@@ -81,6 +81,29 @@ Start every debugging session with this tool.`,
     // Run the investigation engine
     const result = investigate(errorText, cwd, hintFiles);
 
+    // Drain any accumulated build errors from the dev server
+    const buildErrors = drainBuildErrors();
+
+    // Persist build errors as captures on the session so they survive the response
+    for (const be of buildErrors) {
+      session.captures.push({
+        id: `bld_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: new Date().toISOString(),
+        source: "build-error",
+        markerTag: null,
+        data: { tool: be.tool, file: be.file, line: be.line, code: be.code, message: be.message },
+        hypothesisId: null,
+      });
+    }
+
+    // Check if this is a visual error (for screenshot integration)
+    const sourceFiles = result.sourceCode.map((s) => s.relativePath);
+    const visualError = isVisualError(
+      result.error.category,
+      sourceFiles[0] ?? null,
+      errorText,
+    );
+
     // Check memory for past solutions to similar errors
     const pastSolutions = recall(cwd, errorText, 3);
 
@@ -108,6 +131,14 @@ Start every debugging session with this tool.`,
       })),
       git: result.git,
       environment: result.environment,
+      buildErrors: buildErrors.length > 0 ? buildErrors.map((e) => ({
+        tool: e.tool,
+        file: e.file,
+        line: e.line,
+        code: e.code,
+        message: e.message,
+      })) : undefined,
+      visualError,
       userFrames: result.frames.filter((f) => f.isUserCode).map((f) => ({
         fn: f.fn,
         file: basename(f.file),
@@ -134,6 +165,11 @@ Start every debugging session with this tool.`,
       response.nextStep = result.error.suggestion
         ? `Suggested fix: ${result.error.suggestion}`
         : "Use debug_instrument to add logging, then debug_capture to see the output.";
+    }
+
+    // Adjust nextStep if build errors found
+    if (buildErrors.length > 0 && !response.nextStep) {
+      response.nextStep = `${buildErrors.length} build error(s) detected from dev server. Review them — they may be the root cause.`;
     }
 
     return text(response);
