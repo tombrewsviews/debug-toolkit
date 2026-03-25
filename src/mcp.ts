@@ -24,6 +24,7 @@ import { investigate, isVisualError } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, memoryStats, detectPatterns, type CausalLink } from "./memory.js";
 import { triageError } from "./triage.js";
+import { generateSuggestions } from "./suggestions.js";
 import { METHODOLOGY } from "./methodology.js";
 import { runLighthouse, compareSnapshots } from "./perf.js";
 import type { PerfSnapshot } from "./session.js";
@@ -547,6 +548,7 @@ Use this periodically to understand your project's debugging health.`,
     }
 
     const patterns = stats.patterns;
+    const suggestions = generateSuggestions(patterns);
     const critical = patterns.filter((p) => p.severity === "critical");
     const warnings = patterns.filter((p) => p.severity === "warning");
 
@@ -558,14 +560,22 @@ Use this periodically to understand your project's debugging health.`,
         message: p.message,
         details: p.data,
       })),
+      suggestions: suggestions.length > 0 ? suggestions.map((s) => ({
+        category: s.category,
+        priority: s.priority,
+        action: s.action,
+        rationale: s.rationale,
+      })) : undefined,
       summary: patterns.length === 0
         ? `${stats.entries} sessions analyzed. No concerning patterns detected.`
         : `${patterns.length} pattern(s) found: ${critical.length} critical, ${warnings.length} warnings.`,
-      nextStep: critical.length > 0
-        ? `Critical: ${critical[0].message}. Consider refactoring this code.`
-        : patterns.length > 0
-          ? `Top finding: ${patterns[0].message}`
-          : undefined,
+      nextStep: suggestions.length > 0
+        ? `${suggestions.length} preventive suggestion(s) available. Top: ${suggestions[0].action}`
+        : critical.length > 0
+          ? `Critical: ${critical[0].message}. Consider refactoring this code.`
+          : patterns.length > 0
+            ? `Top finding: ${patterns[0].message}`
+            : undefined,
     });
   });
 
