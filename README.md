@@ -7,6 +7,13 @@ npx debug-toolkit demo     # see it work (no AI needed)
 npx debug-toolkit init     # install in your project
 ```
 
+## What's New in v0.7
+
+- **Smart triage gate** — `debug_investigate` now auto-triages errors before running the full pipeline. Trivial errors (syntax mistakes, missing imports, obvious typos) get a fast-path response with `triage: "trivial"` and a `fixHint` in under 100ms. Complex errors still get the full investigation.
+- **Auto-learning** — fixes now auto-save to memory when `debug_verify` passes. No need to call `debug_cleanup` just to persist a diagnosis. `debug_cleanup` is now optional — use it when you want to add a custom `rootCause` causal chain or remove instrumentation markers.
+- **Preventive suggestions** — `debug_patterns` now returns a `suggestions` array alongside detected patterns. Each suggestion has a `category` (lint, config, refactor, test, dependency), `priority`, `action`, and `rationale` — so the agent can proactively fix systemic issues before they recur.
+- **Smarter activation rules** — updated SKILL.md guidance: skip the toolkit for obvious 2-second fixes, use `debug_recall` first for recurring errors, and fast-path trivial triage responses without instrumentation.
+
 ## What's New in v0.6
 
 - **Build error auto-capture** — Vite, tsc, webpack, and ESLint errors are detected automatically from the dev server. `debug_investigate` now returns a `buildErrors` array so the agent sees compile/lint failures without manual log hunting.

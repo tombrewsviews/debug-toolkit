@@ -38,7 +38,7 @@ function text(data: unknown) {
 
 export function createMcpServer(): McpServer {
   const server = new McpServer(
-    { name: "debug-toolkit", version: "0.6.0" },
+    { name: "debug-toolkit", version: "0.7.0" },
     { capabilities: { tools: {}, resources: {} } },
   );
 

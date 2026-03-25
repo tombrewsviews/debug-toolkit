@@ -22,21 +22,22 @@ Use these tools whenever you encounter:
 
 ## The Workflow
 
-**ALWAYS start with `debug_investigate`.** It auto-recalls past solutions.
+**ALWAYS start with `debug_investigate`.** It auto-recalls past solutions and auto-triages the error.
 
 ```
 1. debug_investigate  → understand the error + auto-recall past fixes
+                        (trivial errors get fast-path response with fixHint)
 2. debug_instrument   → add logging if investigation wasn't enough
 3. debug_capture      → collect runtime output
 4. (apply fix)        → edit the code
-5. debug_verify       → confirm the fix works
-6. debug_cleanup      → remove markers, save diagnosis + causal chain to memory
+5. debug_verify       → confirm the fix works (auto-saves to memory on pass)
+6. debug_cleanup      → (optional) add custom rootCause chain or remove instrumentation
 ```
 
 ## Tool Reference
 
 ### debug_investigate
-**Start here.** Works for BOTH runtime errors AND logic bugs. Auto-searches debug memory for past solutions.
+**Start here.** Works for BOTH runtime errors AND logic bugs. Auto-searches debug memory for past solutions. Now includes a **triage gate**: trivial errors (simple syntax mistakes, missing imports, obvious typos) are auto-detected and receive a fast-path response with `triage: "trivial"` and a `fixHint` — no full pipeline needed. Complex errors proceed through the full investigation pipeline.
 
 For runtime errors (stack traces):
 ```
@@ -85,6 +86,18 @@ Pattern types detected:
 - `regression` — bugs that were fixed but came back (missing test coverage)
 - `error_cluster` — multiple errors in a short time window (cascading failure)
 
+**Preventive suggestions**: when patterns are detected, the response includes a `suggestions` array with actionable recommendations:
+```
+suggestions: [
+  {
+    category: "lint" | "config" | "refactor" | "test" | "dependency",
+    priority: "high" | "medium" | "low",
+    action: "Add eslint rule no-unsafe-optional-chaining",
+    rationale: "TypeError has recurred 5 times in src/api.ts"
+  }
+]
+```
+
 ### debug_instrument
 Add tagged logging to source files. Each marker links to a hypothesis.
 ```
@@ -102,14 +115,14 @@ If no command given and nothing buffered, it suggests asking the user to run the
 Returns tagged captures linked to hypotheses, errors separated from normal output.
 
 ### debug_verify
-After applying a fix, run this to confirm it works. Reports pass/fail with evidence.
+After applying a fix, run this to confirm it works. Reports pass/fail with evidence. **Auto-learning**: when the fix passes, the session diagnosis is automatically saved to memory — no manual `debug_cleanup` required just for saving.
 ```
 Input: { sessionId, command: "npm test", expectNoErrors?: true }
 ```
 Output: `{ passed, exitCode, errorCount, errors, output }`
 
 ### debug_cleanup
-Remove ALL instrumentation from source files, verify removal, and save diagnosis to memory.
+Remove ALL instrumentation from source files, verify removal, and save diagnosis to memory. **Now optional** — use it when you want to add a custom `rootCause` causal chain for richer future recall, or when you added instrumentation markers that need to be removed. If no instrumentation was added and `debug_verify` passed, the session is already persisted to memory.
 ```
 Input: {
   sessionId,
@@ -157,13 +170,15 @@ When `phase` is `"after"`, the response also includes a `comparison` object show
 Always-available debugging methodology. Covers the full workflow, anti-patterns to avoid, error pattern shortcuts, and guidance on causal chains, staleness, and pattern detection.
 
 ## Rules
-1. NEVER skip debug_investigate. It's the highest-leverage step.
-2. Read `nextStep` in every response — it tells you what to do.
-3. If past solutions are found, check `stale` — fresh solutions can be trusted.
-4. For logic bugs, pass suspect file paths in the `files` parameter.
-5. ALWAYS run debug_verify before claiming a fix works.
-6. ALWAYS provide both `diagnosis` AND `rootCause` in debug_cleanup — it teaches the system.
-7. Run debug_patterns periodically to spot systemic issues.
-8. The `sessionId` from debug_investigate must be passed to all subsequent tool calls.
-9. If `visualHint.isVisualBug` is true, use screenshot tools before attempting a fix.
-10. Use debug_perf with `phase: "before"` before a perf fix and `phase: "after"` to confirm improvement.
+1. NEVER skip debug_investigate for non-trivial errors. It's the highest-leverage step.
+2. **Skip the toolkit** for obvious errors you can fix immediately (e.g., a clear typo the user just showed you). Use judgment — don't invoke MCP for a 2-second fix.
+3. Read `nextStep` in every response — it tells you what to do.
+4. If past solutions are found via `debug_recall`, apply the known fix directly without re-investigating. Use `debug_recall` first for recurring errors you've seen before.
+5. If `debug_investigate` returns `triage: "trivial"`, apply the `fixHint` directly — skip instrumentation and capture.
+6. For logic bugs, pass suspect file paths in the `files` parameter.
+7. ALWAYS run debug_verify before claiming a fix works. It auto-saves the fix to memory on pass.
+8. `debug_cleanup` is optional when no instrumentation was added and `debug_verify` passed. Use it to add a `rootCause` causal chain or remove instrumentation markers.
+9. Run debug_patterns periodically to spot systemic issues. Act on `suggestions` — they prevent future bugs.
+10. The `sessionId` from debug_investigate must be passed to all subsequent tool calls.
+11. If `visualHint.isVisualBug` is true, use screenshot tools before attempting a fix.
+12. Use debug_perf with `phase: "before"` before a perf fix and `phase: "after"` to confirm improvement.
