@@ -48,6 +48,7 @@ export interface ErrorClassification {
     severity: "fatal" | "error" | "warning";
     suggestion: string;
 }
+export declare function classifyError(raw: string): ErrorClassification;
 /**
  * Determine if an error is visual/CSS-related, warranting screenshot capture.
  */

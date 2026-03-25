@@ -252,7 +252,7 @@ function getEnvironment(cwd) {
     }
     return env;
 }
-function classifyError(raw) {
+export function classifyError(raw) {
     const r = {
         type: "Unknown",
         summary: raw.split("\n")[0]?.slice(0, 200) ?? "",

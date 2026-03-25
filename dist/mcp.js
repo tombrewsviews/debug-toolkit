@@ -19,6 +19,8 @@ import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBu
 import { investigate, isVisualError } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, memoryStats } from "./memory.js";
+import { triageError } from "./triage.js";
+import { generateSuggestions } from "./suggestions.js";
 import { METHODOLOGY } from "./methodology.js";
 import { runLighthouse, compareSnapshots } from "./perf.js";
 let cwd = process.cwd();
@@ -27,7 +29,7 @@ function text(data) {
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 export function createMcpServer() {
-    const server = new McpServer({ name: "debug-toolkit", version: "0.6.0" }, { capabilities: { tools: {}, resources: {} } });
+    const server = new McpServer({ name: "debug-toolkit", version: "0.7.0" }, { capabilities: { tools: {}, resources: {} } });
     // ━━━ RESOURCE: debug_methodology ━━━
     // Always-available debugging methodology. The "hot memory" tier.
     server.registerResource("debug_methodology", "debug://methodology", {
@@ -61,6 +63,25 @@ Start every debugging session with this tool.`,
         }
         else {
             session = createSession(cwd, problem ?? errorText.split("\n")[0]?.slice(0, 100) ?? "Debug session");
+        }
+        // Triage: classify error complexity
+        const triage = triageError(errorText);
+        // Fast-path for trivial errors — skip full pipeline
+        if (triage.level === "trivial" && triage.fixHint) {
+            session.captures.push({
+                id: `inv_${Date.now()}`, timestamp: new Date().toISOString(),
+                source: "environment", markerTag: null,
+                data: { type: "investigation", triage: "trivial", error: triage.classification },
+                hypothesisId: null,
+            });
+            saveSession(cwd, session);
+            return text({
+                sessionId: session.id,
+                triage: "trivial",
+                error: triage.classification,
+                fixHint: triage.fixHint,
+                nextStep: `Trivial error: ${triage.fixHint} Apply the fix, then use debug_verify to confirm.`,
+            });
         }
         // Run the investigation engine
         const result = investigate(errorText, cwd, hintFiles);
@@ -97,6 +118,7 @@ Start every debugging session with this tool.`,
         saveSession(cwd, session);
         const response = {
             sessionId: session.id,
+            triage: triage.level,
             error: result.error,
             sourceCode: result.sourceCode.map((s) => ({
                 file: s.relativePath,
@@ -294,6 +316,34 @@ Use this before cleanup to confirm the fix actually works.`,
         });
         const noErrors = expectNoErrors !== false;
         const passed = exitCode === 0 && (noErrors ? errors.length === 0 : true);
+        // Auto-learning: when fix is verified, auto-save diagnosis to memory
+        if (passed && session.problem) {
+            const errorCap = session.captures.find((c) => c.data?.type === "investigation");
+            const errorData = errorCap?.data;
+            const filesSet = new Set(session.instrumentation.map((i) => basename(i.filePath)));
+            for (const cap of session.captures) {
+                const d = cap.data;
+                if (d?.type === "investigation") {
+                    for (const key of ["hintFiles", "sourceFiles"]) {
+                        if (Array.isArray(d[key])) {
+                            for (const f of d[key])
+                                if (typeof f === "string")
+                                    filesSet.add(f);
+                        }
+                    }
+                }
+            }
+            remember(cwd, {
+                id: session.id,
+                timestamp: new Date().toISOString(),
+                problem: session.problem,
+                errorType: errorData?.error?.type ?? "Unknown",
+                category: errorData?.error?.category ?? "runtime",
+                diagnosis: `Auto-learned: fix verified via "${command}"`,
+                files: [...filesSet],
+                rootCause: null,
+            });
+        }
         return text({
             passed,
             exitCode,
@@ -301,7 +351,7 @@ Use this before cleanup to confirm the fix actually works.`,
             errors: errors.slice(0, 5).map((c) => c.data?.text),
             output: captures.slice(0, 10).map((c) => c.data?.text),
             nextStep: passed
-                ? "Fix verified! Use debug_cleanup to remove instrumentation and close the session. If this was a visual bug, take a screenshot to confirm the visual fix."
+                ? "Fix verified and auto-saved to memory! Use debug_cleanup to remove instrumentation (optional — diagnosis already recorded)."
                 : "Fix failed. Review the errors above and try a different approach.",
         });
     });
@@ -436,6 +486,7 @@ Use this periodically to understand your project's debugging health.`,
             });
         }
         const patterns = stats.patterns;
+        const suggestions = generateSuggestions(patterns);
         const critical = patterns.filter((p) => p.severity === "critical");
         const warnings = patterns.filter((p) => p.severity === "warning");
         return text({
@@ -446,14 +497,22 @@ Use this periodically to understand your project's debugging health.`,
                 message: p.message,
                 details: p.data,
             })),
+            suggestions: suggestions.length > 0 ? suggestions.map((s) => ({
+                category: s.category,
+                priority: s.priority,
+                action: s.action,
+                rationale: s.rationale,
+            })) : undefined,
             summary: patterns.length === 0
                 ? `${stats.entries} sessions analyzed. No concerning patterns detected.`
                 : `${patterns.length} pattern(s) found: ${critical.length} critical, ${warnings.length} warnings.`,
-            nextStep: critical.length > 0
-                ? `Critical: ${critical[0].message}. Consider refactoring this code.`
-                : patterns.length > 0
-                    ? `Top finding: ${patterns[0].message}`
-                    : undefined,
+            nextStep: suggestions.length > 0
+                ? `${suggestions.length} preventive suggestion(s) available. Top: ${suggestions[0].action}`
+                : critical.length > 0
+                    ? `Critical: ${critical[0].message}. Consider refactoring this code.`
+                    : patterns.length > 0
+                        ? `Top finding: ${patterns[0].message}`
+                        : undefined,
         });
     });
     // ━━━ TOOL: debug_perf ━━━
