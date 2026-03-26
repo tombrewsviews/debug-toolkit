@@ -325,7 +325,7 @@ export function classifyError(raw) {
     }
     // Logic/behavior bug detection — no known error pattern matched, check for prose descriptions
     if (r.type === "Unknown" && r.category === "runtime") {
-        const logicPatterns = /wrong|incorrect|mismatch|should be|expected|doesn't match|off by|hardcoded|not (working|showing|rendering|updating|displaying)|broken|behav(e|ior|iour)|visual(ly)?|looks? (wrong|off|different|broken)/i;
+        const logicPatterns = /wrong|incorrect|mismatch|should be|expected|doesn't match|off by|hardcoded|not (working|showing|rendering|updating|displaying)|broken|behav(e|ior|iour)|visual(ly)?|looks? (wrong|off|different|broken)|overlap|collaps|truncat|misalign|overflow|underflow|cropp|clip|hidden|squish|squash|stretch|shrink|wrap|spacing|gap|margin|padding|layout|resize|responsive|flicker|jank|stutter|laggy|slow/i;
         if (logicPatterns.test(raw)) {
             r.type = "LogicBug";
             r.category = "logic";
@@ -345,8 +345,8 @@ export function isVisualError(category, file, description) {
     // CSS file involvement
     if (file && CSS_EXTENSIONS.test(file))
         return true;
-    // Visual error categories
-    if (category === "logic" && description && VISUAL_KEYWORDS.test(description))
+    // Visual keywords in description — regardless of category
+    if (description && VISUAL_KEYWORDS.test(description))
         return true;
     return false;
 }

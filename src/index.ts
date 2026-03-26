@@ -244,40 +244,42 @@ function initCommand(cwd: string): void {
   const rulesPath = join(rulesDir, "debug-toolkit.md");
   writeFileSync(rulesPath, `# debug-toolkit — activation rules
 
-## TRIGGER: Any error, failure, or bug
-When you encounter ANY of these, call debug_investigate BEFORE reading code manually:
-- Stack trace → debug_investigate({ error })
-- Test failure → debug_investigate({ error })
-- "Wrong output" / visual bug → debug_investigate({ error, files: [...] })
-- Bug report → debug_investigate({ error, files: [...] })
+## MANDATORY: Use debug_investigate FIRST for ANY bug or issue
 
-Note: The toolkit auto-triages errors. Trivial errors (missing imports, syntax errors)
-get a fast-path response with a fix hint. Complex errors get the full investigation.
+Call debug_investigate BEFORE reading code manually with Read/Grep/Agent.
+This applies to ALL of these — not just runtime errors:
 
-## SKIP toolkit for:
-- Syntax errors you can already see in the editor
-- Single-character typos with obvious fixes
-- Errors where the user already pasted the full context and fix is obvious
+- Stack trace or runtime error → debug_investigate({ error: "<stack trace>" })
+- Test failure → debug_investigate({ error: "<failure output>" })
+- Layout bug ("overlaps", "misaligned", "collapses", "overflows", "broken on resize")
+  → debug_investigate({ error: "description", files: ["suspect.tsx", "styles.css"] })
+- Visual glitch ("flickers", "wrong color", "disappears", "looks wrong")
+  → debug_investigate({ error: "description", files: [...] })
+- Wrong behavior ("should X but does Y", "doesn't work", "unexpected value")
+  → debug_investigate({ error: "description", files: [...] })
+- Performance issue ("slow", "laggy", "jank")
+  → debug_investigate({ error: "description" }) then debug_perf for metrics
+- Any bug report from the user → debug_investigate({ error: "user's description", files: [...] })
 
-## Use debug_recall (not full investigate) when:
-- The error is clear but might be recurring
-- You want to check if this was solved before
+## SKIP toolkit ONLY for:
+- Single-character typos with an obvious fix
+- The user explicitly tells you the fix and just wants you to apply it
 
-## TRIGGER: After fixing any bug
-The toolkit auto-saves to memory when debug_verify passes.
-Only call debug_cleanup if you need to:
-- Remove debug instrumentation from source files
-- Add a custom diagnosis or rootCause chain
+## After fixing: ALWAYS verify
+Call debug_verify({ sessionId, command: "npm test" }) before claiming a fix works.
 
-## TRIGGER: Before claiming fix works
-ALWAYS call debug_verify({ command: "npm test" })
+## Visual bugs: capture what the user sees
+If debug_investigate returns visualHint.isVisualBug, call debug_visual to capture
+screenshots before and after fixing.
 
-## TRIGGER: Periodically check for patterns
-Call debug_patterns to see recurring issues and preventive suggestions.
+## Performance bugs: measure before and after
+Call debug_perf({ sessionId, url, phase: "before" }) before fixing,
+then debug_perf({ sessionId, url, phase: "after" }) to confirm improvement.
 
-## WHY
-debug_investigate returns error classification, source code, git diff, environment,
-AND past solutions in one call. Trivial errors get fast-path responses in <100ms.
+## WHY use the toolkit instead of manual exploration?
+debug_investigate returns error classification, source code, git context, build errors,
+browser state, past solutions, and auto-captures visual state — all in one call.
+Manual Read/Grep misses runtime context, browser errors, and cross-session memory.
 `);
   success(`Activation rules ${sym.arrow} ${rulesPath}`);
 
