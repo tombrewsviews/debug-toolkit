@@ -50,10 +50,41 @@ npx debug-toolkit import <path>   # import a knowledge pack into this project
 |-------------|----------------|---------------|
 | **Lighthouse** | `debug_perf` — Web Vitals snapshots (LCP, CLS, INP) | `npm install -g lighthouse` |
 | **Chrome** | Headless browser for Lighthouse | Install from [google.com/chrome](https://google.com/chrome) |
-| **Ghost OS** | Screenshots, DOM capture for visual bugs | Add `ghost-os` MCP server to `.mcp.json` |
-| **Claude Preview** | Browser preview screenshots and inspection | Add `Claude_Preview` MCP server to `.mcp.json` |
+| **Ghost OS** | Auto-screenshots, DOM capture, element inspection for visual bugs | `brew install ghostwright/ghost-os/ghost-os` (macOS) |
+| **Claude Preview** | Browser preview screenshots and inspection | Built into Claude Code |
 
 All optional — the toolkit works without any of them. When a tool needs an integration that's missing, you get a clear setup message instead of a cryptic error.
+
+### Ghost OS Deep Integration
+
+When Ghost OS is installed, debug-toolkit connects to it internally as an MCP client — no manual orchestration needed:
+
+```
+debug_investigate detects CSS bug
+  → internally calls ghost_screenshot + ghost_read
+  → saves screenshot to .debug/screenshots/
+  → returns: { visualCapture: { screenshot, elementsFound }, visualHint }
+
+debug_verify after fix
+  → auto-captures after-fix screenshot
+  → returns: { visualVerification: { before, after } }
+```
+
+The agent never needs to call Ghost OS tools directly. Visual capture is automatic for CSS/layout bugs (configurable via `.debug/config.json`):
+
+```json
+{
+  "visual": {
+    "autoCapture": "auto",
+    "captureOnInvestigate": true,
+    "captureOnVerify": true
+  }
+}
+```
+
+Options: `"auto"` (default — captures on visual bugs), `"manual"` (agent-triggered via `debug_visual`), `"off"`.
+
+Without Ghost OS, all visual features gracefully fall back to advisory hints.
 
 ### Installing Integrations
 
@@ -70,10 +101,10 @@ Shows available integrations, marks which can be auto-installed vs manual-only, 
        npm install -g lighthouse
     2) Chrome [auto] — Required for Lighthouse headless testing
        brew install --cask google-chrome
-    3) Ghost OS [manual] — Visual debugging — screenshots, DOM capture
-       Install from https://github.com/ghostwright/ghost-os then run 'ghost setup'
+    3) Ghost OS [auto] — Visual debugging — screenshots, DOM capture (macOS)
+       brew install ghostwright/ghost-os/ghost-os
 
-    a) Install all auto-installable (Lighthouse, Chrome)
+    a) Install all auto-installable (Lighthouse, Chrome, Ghost OS)
 
   Select (numbers comma-separated, 'a' for all, Enter to skip):
 ```
@@ -94,7 +125,7 @@ debug_setup({ action: "install", integration: "lighthouse" })
 |---|---|---|---|
 | Lighthouse | ✅ | ✅ | `npm install -g lighthouse` |
 | Chrome | ✅ (macOS/Linux) | ✅ | `brew install --cask google-chrome` (macOS) |
-| Ghost OS | ❌ Manual | ❌ | Requires download + system permissions |
+| Ghost OS | ✅ (macOS) | ✅ | `brew install ghostwright/ghost-os/ghost-os` |
 | Claude Preview | ✅ Built-in | N/A | Already in Claude Code |
 
 ### Health Check
@@ -124,10 +155,11 @@ npx debug-toolkit doctor
 
 ### Capability-Aware Runtime
 
-The MCP server detects available integrations at startup. Tool behavior adapts:
+The MCP server detects available integrations at startup and connects to Ghost OS if available. Tool behavior adapts:
 
-- **Visual bugs:** If Ghost OS is configured, `debug_investigate` suggests `ghost_screenshot`. If nothing is configured, it says "No visual tools — run `npx debug-toolkit doctor`."
+- **Visual bugs:** If Ghost OS is connected, `debug_investigate` auto-captures screenshots and DOM state. If not, it suggests manual tools or shows setup guidance.
 - **Performance:** If Lighthouse isn't installed, `debug_perf` returns setup instructions immediately instead of failing after a 60-second timeout.
+- **Verification:** If a visual bug was captured during investigation, `debug_verify` auto-captures an after-fix screenshot for comparison.
 - **SKILL.md:** Includes a capabilities table so the agent knows upfront which tools are available — no wasted calls.
 
 ## See It Work
@@ -273,12 +305,15 @@ npx debug-toolkit serve -- cargo tauri dev
 - Past solutions from memory (with staleness info and causal chains)
 - Triage classification (trivial/medium/complex) with explanation
 - Proactive suggestions from high-confidence memory matches
-- Visual hints when CSS/layout bugs are detected (capability-aware)
+- Auto-captured screenshot + DOM state on visual bugs (via Ghost OS, when connected)
 - Token-budgeted response (auto-compressed to fit context windows)
 
 ```
 Input:  { error: "TypeError: Cannot read properties of undefined (reading 'map')" }
 Output: { error, sourceCode, git, environment, pastSolutions, nextStep, triage, _budget }
+
+Input:  { error: "the nav bar overlaps the hero section", files: ["src/Nav.css"] }
+Output: { ..., visualCapture: { screenshot, elementsFound }, visualHint: { isVisualBug: true } }
 ```
 
 ### debug_recall
@@ -353,9 +388,27 @@ Input:  { sessionId, url, phase?: "before" | "after" }
 Output: { LCP, CLS, INP, TBT, speedIndex, comparison? }
 ```
 
+### debug_visual
+
+Capture visual state via Ghost OS — screenshot, element inspection, annotated view, or before/after comparison. Requires Ghost OS to be installed and connected.
+
+```
+Input:  { sessionId, action: "screenshot" }
+Output: { screenshot: ".debug/screenshots/dbg_xxx_manual_123.png" }
+
+Input:  { sessionId, action: "inspect", query: "#nav-bar" }
+Output: { elements: [{ role: "AXGroup", name: "nav-bar", actionable: true }], count: 1 }
+
+Input:  { sessionId, action: "annotate" }
+Output: { screenshot: "...", labels: [{ id: 1, role: "AXButton", name: "Submit", x: 620, y: 350 }] }
+
+Input:  { sessionId, action: "compare" }
+Output: { before: ".debug/screenshots/..._investigate_...", after: ".debug/screenshots/..._compare_..." }
+```
+
 ### debug_setup
 
-Check and install optional integrations from within the agent conversation. No need to switch to a terminal.
+Check, install, and manage integrations from within the agent conversation.
 
 ```
 Input:  { action: "check" }
@@ -363,6 +416,12 @@ Output: { integrations: [...], summary: { available, missing, autoInstallable } 
 
 Input:  { action: "install", integration: "lighthouse" }
 Output: { success: true, message: "Lighthouse installed successfully" }
+
+Input:  { action: "connect" }
+Output: { connected: true, message: "Ghost OS connected successfully" }
+
+Input:  { action: "disconnect" }
+Output: { disconnected: true, message: "Ghost OS disconnected" }
 ```
 
 ## Memory System
@@ -413,20 +472,58 @@ debug-toolkit learns from every session. The memory system is designed to scale:
 ## Testing
 
 ```bash
-npm test                    # 75 tests across 17 files
+npm test                    # 79 tests across 19 files
 npm run test:watch          # watch mode
 npx debug-toolkit demo     # full workflow with real bug
 npx debug-toolkit doctor   # verify environment setup
 ```
 
+## Prerequisites
+
+### Required
+
+| Requirement | Minimum Version | Check |
+|-------------|----------------|-------|
+| **Node.js** | ≥20.19 or ≥22.12 | `node --version` |
+| **npm** | Comes with Node | `npm --version` |
+| **Git** | Any recent version | `git --version` |
+
+### Optional (for enhanced capabilities)
+
+| Requirement | Platform | What It Enables | Install |
+|-------------|----------|----------------|---------|
+| **Lighthouse** | Any | `debug_perf` — Web Vitals profiling | `npm install -g lighthouse` |
+| **Chrome** | Any | Headless browser for Lighthouse | [google.com/chrome](https://google.com/chrome) |
+| **Ghost OS** | macOS only | Auto-screenshots, DOM capture, visual debugging | `brew install ghostwright/ghost-os/ghost-os` |
+| **Homebrew** | macOS | Required for Ghost OS + Chrome auto-install | [brew.sh](https://brew.sh) |
+
+### macOS-Specific (for Ghost OS)
+
+Ghost OS requires system permissions that must be granted manually:
+
+1. **Accessibility** — System Settings → Privacy & Security → Accessibility → Enable for Ghost OS
+2. **Input Monitoring** — System Settings → Privacy & Security → Input Monitoring → Enable for Ghost OS
+3. **Vision sidecar** (optional) — For web app visual grounding. Set up via `ghost setup`
+
+These permissions cannot be granted programmatically. The first time Ghost OS runs, macOS will prompt for each permission.
+
+### What `npx debug-toolkit doctor` Checks
+
+Run `npx debug-toolkit doctor` to verify all prerequisites at once. It groups checks into:
+
+- **Core** (required): Node.js version, Git, `.debug/` directory
+- **Performance** (optional): Lighthouse CLI, Chrome binary
+- **Visual** (optional): Ghost OS configuration, Claude Preview availability
+
 ## Architecture
 
-25 source files, ~6,500 lines of TypeScript. 4 runtime dependencies, 1 dev dependency (vitest).
+26 source files, ~7,000 lines of TypeScript. 5 runtime dependencies, 1 dev dependency (vitest).
 
 ```
 src/
   index.ts         — CLI entry (guided setup, init, install, doctor, serve, export, import)
-  mcp.ts           — 11 tools + 1 resource + MCP server + capability detection
+  mcp.ts           — 13 tools + 1 resource + MCP server + Ghost OS bridge
+  ghost-bridge.ts  — MCP client for Ghost OS (screenshots, DOM, inspect)
   context.ts       — Investigation engine (stack parsing, source, git, env)
   memory.ts        — WAL-backed memory with inverted index + staleness + patterns
   capture.ts       — Ring buffers, terminal pipe, build error parsing, Tauri logs
@@ -442,7 +539,7 @@ src/
   budget.ts        — Token budget estimation + response compression
   explain.ts       — Decision explainability (triage, confidence, archival)
   telemetry.ts     — Debug session outcome tracking + fix rates
-  utils.ts         — Shared utilities (atomicWrite, tokenize, WAL paths)
+  utils.ts         — Shared utilities (atomicWrite, tokenize, WAL paths, screenshots)
   demo.ts          — Self-contained interactive demo
   proxy.ts         — HTTP proxy + HTML injection + WebSocket
   security.ts      — Path traversal, expression validation, redaction
@@ -454,18 +551,24 @@ src/
 
 ## Changelog
 
-### v0.10.0 — Memory Scaling + Integration Overhaul
+### v0.10.0 — Memory Scaling + Integration Overhaul + Ghost OS
+- Ghost OS deep integration — MCP client bridge for auto-screenshots, DOM capture
+- `debug_visual` tool — screenshot, inspect, annotate, before/after compare
+- Auto-capture on visual bugs (configurable: auto/manual/off)
+- Before/after screenshot comparison on `debug_verify`
+- Ghost OS brew-installable on macOS via `npx debug-toolkit install`
 - Write-Ahead Log eliminates full JSON rewrite on every recall
 - Store cache with mtime validation, multi-project index safety
 - Incremental index updates, staleness TTL cache, pattern detection cache
 - Deferred archival (1hr cooldown), physical purge to monthly archive files
 - Budget overflow guard with nuclear fallback
 - `npx debug-toolkit doctor` — environment health check
-- `npx debug-toolkit install` — interactive integration installer (Lighthouse, Chrome)
-- `debug_setup` MCP tool — agent can check/install integrations mid-conversation
+- `npx debug-toolkit install` — interactive integration installer
+- `debug_setup` MCP tool — check/install/connect/disconnect integrations
 - Guided interactive setup via `npx debug-toolkit` (TTY-aware)
-- Capability-aware runtime (visual hints + perf pre-checks adapt to what's installed)
+- Capability-aware runtime adapts to what's installed
 - Dynamic SKILL.md capabilities table
+- `@modelcontextprotocol/sdk` added for MCP client capabilities
 
 ### v0.9.0 — Performance + Observability
 - Inverted index for O(1) memory recall
