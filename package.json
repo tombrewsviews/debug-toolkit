@@ -1,6 +1,6 @@
 {
   "name": "debug-toolkit",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Closed-loop debugging toolkit for AI coding agents",
   "type": "module",
   "bin": {
@@ -26,7 +26,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.28.0",
     "http-proxy": "^1.18.1",
     "tree-kill": "^1.2.2",
     "ws": "^8.18.0"
