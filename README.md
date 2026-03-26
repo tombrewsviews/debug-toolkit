@@ -5,6 +5,7 @@ Closed-loop debugging for AI coding agents. One MCP server gives your agent the 
 ```
 npx debug-toolkit demo            # see it work (no AI needed)
 npx debug-toolkit init            # install in your project
+npx debug-toolkit doctor          # check environment + optional integrations
 npx debug-toolkit export [path]   # export debug memory as a knowledge pack
 npx debug-toolkit import <path>   # import a knowledge pack into this project
 ```
@@ -342,7 +343,7 @@ debug-toolkit learns from every session:
 ### Run the test suite
 
 ```bash
-npm test                    # 63 tests across 15 files
+npm test                    # 71 tests across 16 files
 npm run test:watch          # watch mode
 ```
 
@@ -413,7 +414,7 @@ Then call `debug_recall` in project B — imported entries should appear with `s
 ```bash
 npx debug-toolkit demo     # full workflow with real bug
 npm run build               # TypeScript compiles clean
-npm test                    # 63 tests pass
+npm test                    # 71 tests pass
 ```
 
 ## Architecture
