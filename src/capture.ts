@@ -136,6 +136,18 @@ class RingBuffer<T> {
     return result;
   }
 
+  /** Read last N items without removing them from the buffer */
+  peek(n?: number): T[] {
+    const want = Math.min(n ?? this.count, this.count);
+    if (want === 0) return [];
+    const start = (this.head - want + this.cap) % this.cap;
+    const result: T[] = [];
+    for (let i = 0; i < want; i++) {
+      result.push(this.buf[(start + i) % this.cap] as T);
+    }
+    return result;
+  }
+
   get length(): number { return this.count; }
 }
 
@@ -144,6 +156,31 @@ class RingBuffer<T> {
 export const terminalBuffer = new RingBuffer<Capture>(500);
 export const browserBuffer = new RingBuffer<Capture>(200);
 export const buildBuffer = new RingBuffer<BuildError>(100);
+
+/**
+ * Peek at recent terminal + browser + build output WITHOUT draining.
+ * Used by debug_investigate to auto-include runtime context.
+ */
+export function peekRecentOutput(opts: { terminalLines?: number; browserLines?: number; buildErrors?: number } = {}): {
+  terminal: Capture[];
+  browser: Capture[];
+  buildErrors: BuildError[];
+  counts: { terminal: number; browser: number; buildErrors: number };
+} {
+  const terminal = terminalBuffer.peek(opts.terminalLines ?? 50);
+  const browser = browserBuffer.peek(opts.browserLines ?? 30);
+  const build = buildBuffer.peek(opts.buildErrors ?? 20);
+  return {
+    terminal,
+    browser,
+    buildErrors: build,
+    counts: {
+      terminal: terminalBuffer.length,
+      browser: browserBuffer.length,
+      buildErrors: buildBuffer.length,
+    },
+  };
+}
 
 /**
  * Drain all accumulated build errors from the buffer.

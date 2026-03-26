@@ -1,6 +1,6 @@
 {
   "name": "debug-toolkit",
-  "version": "0.11.4",
+  "version": "0.11.5",
   "description": "Closed-loop debugging toolkit for AI coding agents",
   "type": "module",
   "bin": {
@@ -13,6 +13,10 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./vite-plugin": "./dist/vite-plugin.js"
   },
   "files": [
     "dist",

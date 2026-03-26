@@ -352,6 +352,51 @@ You have access to a debugging toolkit via MCP. Start every debugging task with 
     info(`${c.green}${sym.check}${c.reset} Rust code instrumentation (eprintln! with markers)`);
     info(`${c.green}${sym.check}${c.reset} Tauri log file auto-discovery and tailing`);
     info(`${c.green}${sym.check}${c.reset} RUST_BACKTRACE=1 auto-enabled in serve mode`);
+
+    // Auto-configure Vite plugin for webview console capture
+    let vitePluginAdded = false;
+    for (const ext of ["ts", "js", "mts", "mjs"]) {
+      const viteConfPath = join(cwd, `vite.config.${ext}`);
+      if (!existsSync(viteConfPath)) continue;
+      try {
+        const viteConf = readFileSync(viteConfPath, "utf-8");
+        if (viteConf.includes("debug-toolkit/vite-plugin") || viteConf.includes("debugToolkit")) {
+          info(`${c.green}${sym.check}${c.reset} Vite plugin already configured (webview console capture)`);
+          vitePluginAdded = true;
+        } else {
+          // Add import and plugin to vite.config
+          let modified = viteConf;
+          // Add import after last import statement
+          const lastImportIdx = modified.lastIndexOf("\nimport ");
+          if (lastImportIdx !== -1) {
+            const lineEnd = modified.indexOf("\n", lastImportIdx + 1);
+            modified = modified.slice(0, lineEnd + 1)
+              + `import debugToolkit from "debug-toolkit/vite-plugin";\n`
+              + modified.slice(lineEnd + 1);
+          } else {
+            modified = `import debugToolkit from "debug-toolkit/vite-plugin";\n` + modified;
+          }
+
+          // Add plugin to plugins array
+          const pluginsMatch = modified.match(/plugins\s*:\s*\[/);
+          if (pluginsMatch && pluginsMatch.index !== undefined) {
+            const insertAt = pluginsMatch.index + pluginsMatch[0].length;
+            modified = modified.slice(0, insertAt)
+              + `\n      debugToolkit(),`
+              + modified.slice(insertAt);
+          }
+
+          writeFileSync(viteConfPath, modified);
+          success(`Vite plugin added ${sym.arrow} ${viteConfPath} (webview console capture)`);
+          vitePluginAdded = true;
+        }
+        break;
+      } catch {}
+    }
+    if (!vitePluginAdded) {
+      warn("Could not auto-configure Vite plugin for webview console capture");
+      dim("    Add manually: import debugToolkit from 'debug-toolkit/vite-plugin' to vite.config");
+    }
     dim("");
   }
 

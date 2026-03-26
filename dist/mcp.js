@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createSession, loadSession, saveSession, newHypothesisId, } from "./session.js";
 import { instrumentFile } from "./instrument.js";
 import { cleanupSession } from "./cleanup.js";
-import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBuildErrors } from "./capture.js";
+import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBuildErrors, peekRecentOutput } from "./capture.js";
 import { investigate, isVisualError } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, memoryStats, maybeArchive } from "./memory.js";
@@ -115,6 +115,9 @@ Start every debugging session with this tool.`,
         const result = investigate(errorText, cwd, hintFiles);
         // Drain any accumulated build errors from the dev server
         const buildErrors = drainBuildErrors();
+        // Auto-include recent runtime output from ring buffers (peek, don't drain)
+        const recentOutput = peekRecentOutput({ terminalLines: 30, browserLines: 20, buildErrors: 10 });
+        const tauriLogs = readTauriLogs(cwd, 30);
         // Persist build errors as captures on the session so they survive the response
         for (const be of buildErrors) {
             session.captures.push({
@@ -173,6 +176,48 @@ Start every debugging session with this tool.`,
                 line: f.line,
             })),
         };
+        // Auto-include runtime output so agent sees live dev server state
+        const hasTerminal = recentOutput.terminal.length > 0;
+        const hasBrowser = recentOutput.browser.length > 0;
+        const hasTauri = tauriLogs.length > 0;
+        if (hasTerminal || hasBrowser || hasTauri || recentOutput.buildErrors.length > 0) {
+            const runtimeContext = {};
+            if (hasTerminal) {
+                // Filter to errors/warnings — skip noise
+                const termErrors = recentOutput.terminal.filter((c) => {
+                    const d = typeof c.data === "object" && c.data !== null ? c.data : null;
+                    const text = d?.text ?? d?.data ?? String(c.data);
+                    const str = typeof text === "string" ? text : JSON.stringify(text);
+                    return /error|warn|panic|failed|crash|exception|SIGTERM|SIGKILL/i.test(str);
+                });
+                if (termErrors.length > 0) {
+                    runtimeContext.terminalErrors = termErrors.slice(-15).map((c) => {
+                        const d = typeof c.data === "object" && c.data !== null ? c.data : null;
+                        return { timestamp: c.timestamp, text: d?.text ?? d?.data ?? String(c.data) };
+                    });
+                }
+                runtimeContext.terminalBufferSize = recentOutput.counts.terminal;
+            }
+            if (hasBrowser) {
+                runtimeContext.browserConsole = recentOutput.browser.slice(-15).map((c) => {
+                    const d = typeof c.data === "object" && c.data !== null ? c.data : null;
+                    return { timestamp: c.timestamp, source: c.source, ...(d ?? { text: String(c.data) }) };
+                });
+                runtimeContext.browserBufferSize = recentOutput.counts.browser;
+            }
+            if (hasTauri) {
+                runtimeContext.tauriLogs = tauriLogs.slice(-15).map((c) => {
+                    const d = typeof c.data === "object" && c.data !== null ? c.data : null;
+                    return { timestamp: c.timestamp, text: d?.text ?? String(c.data) };
+                });
+            }
+            if (recentOutput.buildErrors.length > 0) {
+                runtimeContext.recentBuildErrors = recentOutput.buildErrors.map((e) => ({
+                    tool: e.tool, file: e.file, line: e.line, code: e.code, message: e.message,
+                }));
+            }
+            response.runtimeContext = runtimeContext;
+        }
         // Include past solutions if found (with staleness + causal info)
         if (pastSolutions.length > 0) {
             const fresh = pastSolutions.filter((s) => !s.staleness.stale);

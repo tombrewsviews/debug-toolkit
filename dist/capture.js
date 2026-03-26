@@ -108,12 +108,43 @@ class RingBuffer {
         this.buf = new Array(this.cap); // Release references
         return result;
     }
+    /** Read last N items without removing them from the buffer */
+    peek(n) {
+        const want = Math.min(n ?? this.count, this.count);
+        if (want === 0)
+            return [];
+        const start = (this.head - want + this.cap) % this.cap;
+        const result = [];
+        for (let i = 0; i < want; i++) {
+            result.push(this.buf[(start + i) % this.cap]);
+        }
+        return result;
+    }
     get length() { return this.count; }
 }
 // --- Buffers ---
 export const terminalBuffer = new RingBuffer(500);
 export const browserBuffer = new RingBuffer(200);
 export const buildBuffer = new RingBuffer(100);
+/**
+ * Peek at recent terminal + browser + build output WITHOUT draining.
+ * Used by debug_investigate to auto-include runtime context.
+ */
+export function peekRecentOutput(opts = {}) {
+    const terminal = terminalBuffer.peek(opts.terminalLines ?? 50);
+    const browser = browserBuffer.peek(opts.browserLines ?? 30);
+    const build = buildBuffer.peek(opts.buildErrors ?? 20);
+    return {
+        terminal,
+        browser,
+        buildErrors: build,
+        counts: {
+            terminal: terminalBuffer.length,
+            browser: browserBuffer.length,
+            buildErrors: buildBuffer.length,
+        },
+    };
+}
 /**
  * Drain all accumulated build errors from the buffer.
  */

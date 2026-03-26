@@ -61,6 +61,12 @@ Output includes:
 - `sourceCode` — code at crash site or from hint files
 - `git` — branch, recent changes to relevant files
 - `buildErrors` — auto-captured from dev server (Vite, tsc, webpack, ESLint)
+- `runtimeContext` — **live output from the running app** (auto-included when dev server is running):
+  - `terminalErrors` — recent stderr/stdout errors, warnings, panics from the process
+  - `browserConsole` — console.log/warn/error from the browser/webview (requires Vite plugin for Tauri)
+  - `tauriLogs` — Tauri-specific log files
+  - `recentBuildErrors` — build errors from Vite/tsc/webpack/ESLint
+  - `terminalBufferSize` / `browserBufferSize` — how much output is buffered
 - `pastSolutions` — previous fixes for similar bugs (with staleness + confidence)
 - `proactiveSuggestion` — high-confidence past fix (>80%) — apply directly
 - `visualHint` — set when visual/CSS bug detected: `{ isVisualBug, message, suggestedActions }`

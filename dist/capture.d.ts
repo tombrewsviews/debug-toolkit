@@ -18,11 +18,31 @@ declare class RingBuffer<T> {
     constructor(capacity: number);
     push(item: T): void;
     drain(): T[];
+    /** Read last N items without removing them from the buffer */
+    peek(n?: number): T[];
     get length(): number;
 }
 export declare const terminalBuffer: RingBuffer<Capture>;
 export declare const browserBuffer: RingBuffer<Capture>;
 export declare const buildBuffer: RingBuffer<BuildError>;
+/**
+ * Peek at recent terminal + browser + build output WITHOUT draining.
+ * Used by debug_investigate to auto-include runtime context.
+ */
+export declare function peekRecentOutput(opts?: {
+    terminalLines?: number;
+    browserLines?: number;
+    buildErrors?: number;
+}): {
+    terminal: Capture[];
+    browser: Capture[];
+    buildErrors: BuildError[];
+    counts: {
+        terminal: number;
+        browser: number;
+        buildErrors: number;
+    };
+};
 /**
  * Drain all accumulated build errors from the buffer.
  */
