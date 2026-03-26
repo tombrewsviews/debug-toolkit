@@ -1023,8 +1023,8 @@ export async function startMcpServer(): Promise<void> {
   }
 
   // Clean shutdown
-  process.on("SIGINT", () => { disconnectGhostOs(); });
-  process.on("SIGTERM", () => { disconnectGhostOs(); });
+  process.on("SIGINT", async () => { await disconnectGhostOs(); process.exit(0); });
+  process.on("SIGTERM", async () => { await disconnectGhostOs(); process.exit(0); });
 
   const server = createMcpServer();
   const transport = new StdioServerTransport();

@@ -12,7 +12,7 @@
  *   5. Returns a single structured object with everything the agent needs
  */
 
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, basename, relative, isAbsolute, resolve } from "node:path";
 import { redactSensitiveData } from "./security.js";
@@ -207,30 +207,29 @@ function getGitContext(cwd: string, files: string[]): GitContext {
   const ctx: GitContext = { branch: null, commit: null, dirty: 0, recentChanges: null };
 
   try {
-    ctx.branch = execSync("git branch --show-current 2>/dev/null", { cwd, timeout: 3000 }).toString().trim();
-    ctx.commit = execSync("git rev-parse --short HEAD 2>/dev/null", { cwd, timeout: 3000 }).toString().trim();
+    ctx.branch = execFileSync("git", ["branch", "--show-current"], { cwd, timeout: 3000, stdio: "pipe" }).toString().trim();
+    ctx.commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd, timeout: 3000, stdio: "pipe" }).toString().trim();
 
-    const status = execSync("git status --porcelain 2>/dev/null", { cwd, timeout: 3000 }).toString().trim();
+    const status = execFileSync("git", ["status", "--porcelain"], { cwd, timeout: 3000, stdio: "pipe" }).toString().trim();
     ctx.dirty = status ? status.split("\n").length : 0;
 
     // Get recent changes to relevant files (last 3 commits)
     if (files.length > 0) {
       const relFiles = files.map((f) => relative(cwd, f)).filter((f) => !f.startsWith(".."));
       if (relFiles.length > 0) {
-        const fileArgs = relFiles.map((f) => `"${f}"`).join(" ");
         try {
-          const diff = execSync(
-            `git log --oneline -3 --diff-filter=M -- ${fileArgs} 2>/dev/null`,
-            { cwd, timeout: 5000 },
+          const diff = execFileSync(
+            "git", ["log", "--oneline", "-3", "--diff-filter=M", "--", ...relFiles],
+            { cwd, timeout: 5000, stdio: "pipe" },
           ).toString().trim();
           if (diff) ctx.recentChanges = diff;
         } catch {}
 
         // Also get unstaged changes
         try {
-          const unstaged = execSync(
-            `git diff --stat -- ${fileArgs} 2>/dev/null`,
-            { cwd, timeout: 5000 },
+          const unstaged = execFileSync(
+            "git", ["diff", "--stat", "--", ...relFiles],
+            { cwd, timeout: 5000, stdio: "pipe" },
           ).toString().trim();
           if (unstaged) {
             ctx.recentChanges = (ctx.recentChanges ? ctx.recentChanges + "\n\n" : "") +

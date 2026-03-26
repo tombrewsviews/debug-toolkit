@@ -10,7 +10,7 @@
  * Zero native dependencies. Fast enough for hundreds of sessions.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { computeConfidence, ARCHIVE_THRESHOLD } from "./confidence.js";
@@ -200,7 +200,7 @@ interface MemoryStore {
 
 function getGitSha(cwd: string): string | null {
   try {
-    return execSync("git rev-parse --short HEAD 2>/dev/null", { cwd, timeout: 3000 })
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd, timeout: 3000, stdio: "pipe" })
       .toString().trim() || null;
   } catch { return null; }
 }
@@ -218,9 +218,9 @@ function batchCommitCounts(cwd: string, baseSha: string, files: string[]): Map<s
   if (files.length === 0) return counts;
 
   try {
-    const result = execSync(
-      `git log --format="" --name-only ${baseSha}..HEAD -- ${files.map(f => `"${f}"`).join(" ")}`,
-      { cwd, timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    const result = execFileSync(
+      "git", ["log", "--format=", "--name-only", `${baseSha}..HEAD`, "--", ...files],
+      { cwd, timeout: 5000, stdio: "pipe" },
     ).toString();
 
     for (const line of result.split("\n")) {
