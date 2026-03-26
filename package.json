@@ -1,10 +1,11 @@
 {
   "name": "debug-toolkit",
-  "version": "0.10.9",
+  "version": "0.11.0",
   "description": "Closed-loop debugging toolkit for AI coding agents",
   "type": "module",
   "bin": {
-    "debug-toolkit": "./dist/index.js"
+    "debug-toolkit": "./dist/index.js",
+    "dbg": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc && cp src/injected.js dist/injected.js",

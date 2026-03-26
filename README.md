@@ -3,8 +3,10 @@
 Closed-loop debugging for AI coding agents. One MCP server gives your agent the ability to **see code running** — not just read and write it.
 
 ```
-npx debug-toolkit                 # guided setup (first time) or menu (returning)
+dbg                               # guided setup (first time) or menu (returning)
 ```
+
+> **Alias:** `dbg` is a shorthand for `npx debug-toolkit`. Both work interchangeably.
 
 ## Quick Start
 
@@ -12,7 +14,7 @@ One command. No docs needed. No prior knowledge required.
 
 ```bash
 cd your-project
-npx debug-toolkit
+dbg
 ```
 
 **First time?** The guided setup detects your project, installs MCP config, checks optional integrations, and offers to install missing tools — all interactively.
@@ -24,16 +26,17 @@ npx debug-toolkit
 ### Direct Commands (for scripts and CI)
 
 ```
-npx debug-toolkit init            # non-interactive setup
-npx debug-toolkit doctor          # check environment + optional integrations
-npx debug-toolkit demo            # see it work (no AI needed)
-npx debug-toolkit export [path]   # export debug memory as a knowledge pack
-npx debug-toolkit import <path>   # import a knowledge pack into this project
+dbg init            # non-interactive setup
+dbg doctor          # check environment + optional integrations
+dbg serve -- npm run dev   # start dev server with capture + live activity feed
+dbg demo            # see it work (no AI needed)
+dbg export [path]   # export debug memory as a knowledge pack
+dbg import <path>   # import a knowledge pack into this project
 ```
 
 ## What Happens During Setup
 
-`npx debug-toolkit` (or `npx debug-toolkit init`) does the following:
+`dbg` (or `dbg init`) does the following:
 
 1. **Detects your project** — reads `package.json`, identifies Tauri/Vite/React projects
 2. **Preflight checks** — validates Node.js version, dependencies, git, Rust (if Tauri)
@@ -87,7 +90,7 @@ Without Ghost OS, all visual features gracefully fall back to advisory hints.
 
 ### Installing Integrations
 
-Optional integrations (Lighthouse, Chrome, Ghost OS) are auto-installed during `npx debug-toolkit` setup. The agent can also check and install them mid-conversation via the `debug_setup` MCP tool:
+Optional integrations (Lighthouse, Chrome, Ghost OS) are auto-installed during `dbg` setup. The agent can also check and install them mid-conversation via the `debug_setup` MCP tool:
 
 ```
 debug_setup({ action: "check" })
@@ -109,7 +112,7 @@ debug_setup({ action: "install", integration: "lighthouse" })
 Run anytime to verify your setup:
 
 ```bash
-npx debug-toolkit doctor
+dbg doctor
 ```
 
 ```
@@ -140,7 +143,7 @@ The MCP server detects available integrations at startup and connects to Ghost O
 
 ## See It Work
 
-Run `npx debug-toolkit demo` — creates a temp project with a real bug, walks through the full debug loop, no AI needed:
+Run `dbg demo` — creates a temp project with a real bug, walks through the full debug loop, no AI needed:
 
 ```
 ━━━ Step 1: debug_investigate ━━━
@@ -219,7 +222,7 @@ One debug session. Full context. Diagnosis saved for next time.
 ### Any project (JS/TS/Python/Go)
 
 ```bash
-npx debug-toolkit
+dbg
 ```
 
 Guided setup: detects your project, writes `.mcp.json`, installs hooks and rules. Restart Claude Code and you're done.
@@ -228,7 +231,7 @@ Guided setup: detects your project, writes `.mcp.json`, installs hooks and rules
 
 ```bash
 cd my-tauri-app
-npx debug-toolkit
+dbg
 ```
 
 If `src-tauri/` exists, debug-toolkit automatically:
@@ -258,14 +261,27 @@ Add to `.mcp.json`:
 **Pure MCP** (default) — Just the MCP server on stdio. Agent gets all tools. No wrapper needed.
 
 ```bash
-npx debug-toolkit
+dbg
 ```
 
-**Serve** — Wraps your dev server. Adds browser console/network capture via HTTP proxy + WebSocket.
+**Serve** — Wraps your dev server. Adds browser console/network capture via HTTP proxy + WebSocket, plus a **live activity feed** showing what the toolkit does for the agent in real time.
 
 ```bash
-npx debug-toolkit serve -- npm run dev
-npx debug-toolkit serve -- cargo tauri dev
+dbg serve -- npm run dev
+dbg serve -- cargo tauri dev
+```
+
+Activity feed output (in your terminal while the agent debugs):
+```
+  ⚡ investigate — "TypeError: Cannot read property 'x'" (triage: medium, files: 2, memoryHits: 1)
+  💡 recall — found 1 past fix (87% confidence)
+  🔧 instrument — added [DBG_001] to App.tsx:42
+  📡 capture — drained buffers (total: 12, tagged: 3)
+  ✓  verify — PASSED (duration: 45s, captures: 16, outcome: fixed)
+  ─────────────────────────────────────────────────
+  SESSION
+  Duration: 45s | Outcome: fixed | Memory: saved
+  ─────────────────────────────────────────────────
 ```
 
 ## Tools
@@ -357,7 +373,7 @@ Lightweight view of current state: hypotheses, active instruments, recent captur
 
 ### debug_perf
 
-Capture a Lighthouse performance snapshot for a URL. Pass `phase: "before"` before a fix and `phase: "after"` to get a comparison. Requires Lighthouse + Chrome (run `npx debug-toolkit doctor` to check).
+Capture a Lighthouse performance snapshot for a URL. Pass `phase: "before"` before a fix and `phase: "after"` to get a comparison. Requires Lighthouse + Chrome (run `dbg doctor` to check).
 
 ```
 Input:  { sessionId, url, phase?: "before" | "after" }
@@ -450,8 +466,8 @@ debug-toolkit learns from every session. The memory system is designed to scale:
 ```bash
 npm test                    # 79 tests across 19 files
 npm run test:watch          # watch mode
-npx debug-toolkit demo     # full workflow with real bug
-npx debug-toolkit doctor   # verify environment setup
+dbg demo     # full workflow with real bug
+dbg doctor   # verify environment setup
 ```
 
 ## Prerequisites
@@ -483,9 +499,9 @@ Ghost OS requires system permissions that must be granted manually:
 
 These permissions cannot be granted programmatically. The first time Ghost OS runs, macOS will prompt for each permission.
 
-### What `npx debug-toolkit doctor` Checks
+### What `dbg doctor` Checks
 
-Run `npx debug-toolkit doctor` to verify all prerequisites at once. It groups checks into:
+Run `dbg doctor` to verify all prerequisites at once. It groups checks into:
 
 - **Core** (required): Node.js version, Git, `.debug/` directory
 - **Performance** (optional): Lighthouse CLI, Chrome binary
@@ -493,12 +509,13 @@ Run `npx debug-toolkit doctor` to verify all prerequisites at once. It groups ch
 
 ## Architecture
 
-26 source files, ~7,000 lines of TypeScript. 5 runtime dependencies, 1 dev dependency (vitest).
+27 source files, ~7,200 lines of TypeScript. 5 runtime dependencies, 1 dev dependency (vitest).
 
 ```
 src/
-  index.ts         — CLI entry (guided setup, init, install, doctor, serve, export, import)
+  index.ts         — CLI entry (guided setup, init, doctor, serve, export, import)
   mcp.ts           — 13 tools + 1 resource + MCP server + Ghost OS bridge
+  activity.ts      — Live activity feed (file-based IPC between MCP and serve terminal)
   ghost-bridge.ts  — MCP client for Ghost OS (screenshots, DOM, inspect)
   context.ts       — Investigation engine (stack parsing, source, git, env)
   memory.ts        — WAL-backed memory with inverted index + staleness + patterns
@@ -527,6 +544,13 @@ src/
 
 ## Changelog
 
+### v0.11.0 — Live Activity Feed + `dbg` Alias
+- **Live activity feed** in serve terminal — see what the toolkit does for the agent in real time
+- File-based IPC (`activity.jsonl`) between MCP and serve processes
+- Session summary on verify-pass and cleanup (duration, outcome, captures, memory)
+- `dbg` CLI alias — short for `npx debug-toolkit`
+- Removed redundant `install` command (integrations auto-install during setup)
+
 ### v0.10.0 — Memory Scaling + Integration Overhaul + Ghost OS
 - Ghost OS deep integration — MCP client bridge for auto-screenshots, DOM capture
 - `debug_visual` tool — screenshot, inspect, annotate, before/after compare
@@ -538,9 +562,9 @@ src/
 - Incremental index updates, staleness TTL cache, pattern detection cache
 - Deferred archival (1hr cooldown), physical purge to monthly archive files
 - Budget overflow guard with nuclear fallback
-- `npx debug-toolkit doctor` — environment health check
+- `dbg doctor` — environment health check
 - `debug_setup` MCP tool — check/install/connect/disconnect integrations
-- Guided interactive setup via `npx debug-toolkit` (TTY-aware)
+- Guided interactive setup via `dbg` (TTY-aware)
 - Capability-aware runtime adapts to what's installed
 - Dynamic SKILL.md capabilities table
 - `@modelcontextprotocol/sdk` added for MCP client capabilities

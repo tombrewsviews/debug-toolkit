@@ -38,6 +38,7 @@ import {
   takeScreenshot, readScreen, findElements, annotateScreen,
 } from "./ghost-bridge.js";
 import { screenshotDir, saveScreenshot, getPackageVersion } from "./utils.js";
+import { enableActivityWriter, logActivity } from "./activity.js";
 
 let cwd = process.cwd();
 let envCaps: EnvironmentCapabilities | null = null;
@@ -130,6 +131,7 @@ Start every debugging session with this tool.`,
       });
       saveSession(cwd, session);
 
+      logActivity({ tool: "debug_investigate", ts: Date.now(), summary: `"${errorText.split("\n")[0]?.slice(0, 60)}"`, metrics: { triage: "trivial" } });
       return text({
         sessionId: session.id,
         triage: "trivial",
@@ -335,6 +337,17 @@ Start every debugging session with this tool.`,
       isTrivialPattern,
     );
 
+    logActivity({
+      tool: "debug_investigate", ts: Date.now(),
+      summary: `"${errorText.split("\n")[0]?.slice(0, 60)}"`,
+      metrics: {
+        triage: triage.level,
+        files: result.sourceCode.length,
+        ...(pastSolutions.length > 0 ? { memoryHits: pastSolutions.length } : {}),
+        ...(buildErrors.length > 0 ? { buildErrors: buildErrors.length } : {}),
+      },
+    });
+
     const budgeted = fitToBudget(response, { maxTokens: 4000 });
     return { content: [{ type: "text", text: JSON.stringify(budgeted, null, 2) }] };
   });
@@ -373,6 +386,7 @@ Supports JS/TS/Python/Go.`,
 
     const r = instrumentFile({ cwd, session, filePath, lineNumber, expression, hypothesisId: hypId, condition });
 
+    logActivity({ tool: "debug_instrument", ts: Date.now(), summary: `added [${r.markerTag}] to ${basename(filePath)}:${lineNumber}`, metrics: hypothesis ? { hypothesis } : undefined });
     return text({
       markerTag: r.markerTag,
       file: basename(filePath),
@@ -425,6 +439,7 @@ Results are paginated — only the most recent captures are returned.`,
       return d?.stream === "stderr" || d?.text?.toLowerCase().includes("error");
     });
 
+    logActivity({ tool: "debug_capture", ts: Date.now(), summary: command ? `ran "${command}"` : "drained buffers", metrics: { total: recent.total, tagged: tagged.length, errors: errors.length } });
     return text({
       total: recent.total,
       showing: recent.showing,
@@ -574,6 +589,12 @@ Use this before cleanup to confirm the fix actually works.`,
       } catch { /* non-fatal */ }
     }
 
+    const verifyDuration = Math.round((Date.now() - new Date(session.createdAt).getTime()) / 1000);
+    logActivity({
+      tool: "debug_verify", ts: Date.now(),
+      summary: passed ? "PASSED" : "FAILED",
+      metrics: { duration: `${verifyDuration}s`, errors: errors.length, captures: session.captures.length, hypotheses: session.hypotheses.length, ...(passed ? { outcome: "fixed", savedToMemory: "yes" } : { outcome: "failed" }) },
+    });
     return text(verifyResponse);
   });
 
@@ -636,6 +657,12 @@ Idempotent — safe to call multiple times. Files are restored to their pre-inst
     maybeArchive(cwd);
     const stats = memoryStats(cwd);
 
+    const cleanupDuration = Math.round((Date.now() - new Date(session.createdAt).getTime()) / 1000);
+    logActivity({
+      tool: "debug_cleanup", ts: Date.now(),
+      summary: `${r.cleaned} file(s) cleaned${diagnosis ? ", diagnosis saved" : ""}`,
+      metrics: { duration: `${cleanupDuration}s`, memoryEntries: stats.entries, captures: session.captures.length, hypotheses: session.hypotheses.length, savedToMemory: diagnosis ? "yes" : "no" },
+    });
     return text({
       cleaned: r.cleaned,
       verified: r.verified,
@@ -665,6 +692,7 @@ the same error may have been solved before in this project.`,
     const stats = memoryStats(cwd);
 
     if (matches.length === 0) {
+      logActivity({ tool: "debug_recall", ts: Date.now(), summary: `no matches in ${stats.entries} entries` });
       return text({
         matches: [],
         memoryEntries: stats.entries,
@@ -676,6 +704,7 @@ the same error may have been solved before in this project.`,
 
     const staleCount = matches.filter((m) => m.staleness.stale).length;
 
+    logActivity({ tool: "debug_recall", ts: Date.now(), summary: `found ${matches.length} past fix(es)`, metrics: { topConfidence: Math.round((matches[0].confidence ?? matches[0].relevance) * 100) + "%", stale: staleCount } });
     return text({
       matches: matches.map((m) => {
         const entry: Record<string, unknown> = {
@@ -733,6 +762,8 @@ Use this periodically to understand your project's debugging health.`,
     const suggestions = generateSuggestions(patterns);
     const critical = patterns.filter((p) => p.severity === "critical");
     const warnings = patterns.filter((p) => p.severity === "warning");
+
+    logActivity({ tool: "debug_patterns", ts: Date.now(), summary: patterns.length === 0 ? "no patterns" : `${patterns.length} pattern(s)`, metrics: patterns.length > 0 ? { critical: critical.length, warnings: warnings.length } : undefined });
 
     const telemetrySection = telemetry.aggregates.totalSessions > 0 ? {
       totalSessions: telemetry.aggregates.totalSessions,
@@ -836,6 +867,11 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
       }
     }
 
+    logActivity({
+      tool: "debug_perf", ts: Date.now(),
+      summary: `${snapshotPhase} snapshot for ${url}`,
+      metrics: { lcp: metrics.lcp !== null ? `${Math.round(metrics.lcp)}ms` : "n/a", cls: metrics.cls !== null ? metrics.cls.toFixed(3) : "n/a", ...(comparison ? { improved: (comparison as Record<string, unknown>).improved ? "yes" : "no" } : {}) },
+    });
     return text({
       phase: snapshotPhase,
       url,
@@ -865,6 +901,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
       integration: z.string().optional().describe("Integration id to install: lighthouse, chrome, ghost-os"),
     },
     async ({ action, integration }) => {
+      logActivity({ tool: "debug_setup", ts: Date.now(), summary: action === "install" ? `install ${integration ?? "?"}` : action });
       if (action === "connect") {
         resetConnectionState();
         const connected = await connectToGhostOs();
@@ -927,6 +964,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
       app: z.string().optional().describe("Target app (default: frontmost)"),
     },
     async ({ sessionId, action, query, app }) => {
+      logActivity({ tool: "debug_visual", ts: Date.now(), summary: action });
       if (!isGhostConnected()) {
         return text({
           error: "Ghost OS is not connected.",
@@ -993,6 +1031,7 @@ Lightweight — returns a summary, not the full capture history.`,
     const session = loadSession(cwd, sessionId);
     const recent = getRecentCaptures(session, { limit: 10 });
 
+    logActivity({ tool: "debug_session", ts: Date.now(), summary: `status: ${session.status}`, metrics: { hypotheses: session.hypotheses.length, captures: session.captures.length } });
     return text({
       id: session.id,
       status: session.status,
@@ -1016,6 +1055,7 @@ Lightweight — returns a summary, not the full capture history.`,
 export async function startMcpServer(): Promise<void> {
   envCaps = detectEnvironment(cwd);
   loadVisualConfig(cwd);
+  enableActivityWriter(cwd);
 
   // Attempt Ghost OS connection (lazy — won't block if unavailable)
   if (envCaps?.visual.ghostOsConfigured) {

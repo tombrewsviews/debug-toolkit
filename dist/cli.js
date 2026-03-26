@@ -195,13 +195,13 @@ export function printHelp() {
   ${c.dim}Your AI agent's debugging superpower — investigate, fix, and learn from every bug.${c.reset}
 
   ${c.bold}QUICK START${c.reset}
-    ${c.green}npx debug-toolkit${c.reset}          ${c.dim}guided setup (in terminal) or MCP server (in Claude Code)${c.reset}
+    ${c.green}dbg${c.reset}                        ${c.dim}guided setup (in terminal) or MCP server (in Claude Code)${c.reset}
 
-  ${c.bold}COMMANDS${c.reset}
+  ${c.bold}COMMANDS${c.reset}  ${c.dim}(use ${c.reset}dbg${c.dim} or ${c.reset}npx debug-toolkit${c.dim})${c.reset}
     ${c.dim}(no args)${c.reset}         guided setup (interactive) or MCP server (non-interactive)
     init              non-interactive setup (writes .mcp.json, hooks, rules)
     doctor            check environment + optional integrations
-    serve             start dev server with browser capture (auto-detects dev command)
+    serve             start dev server with browser + activity capture
     export [path]     export debug memory to a portable knowledge pack
     import <path>     import a knowledge pack into this project
     uninstall         remove debug-toolkit from this project (preserves .debug/)
@@ -211,8 +211,8 @@ export function printHelp() {
     ${c.white}Pure MCP${c.reset}   Just add to your MCP config. No wrapper needed.
                ${c.dim}Agent gets: investigate, instrument, capture, verify, cleanup${c.reset}
 
-    ${c.white}Serve${c.reset}      ${c.green}npx debug-toolkit serve -- npm run dev${c.reset}
-               ${c.dim}Everything above + browser console/network capture via proxy${c.reset}
+    ${c.white}Serve${c.reset}      ${c.green}dbg serve -- npm run dev${c.reset}
+               ${c.dim}Everything above + browser capture + live activity feed${c.reset}
 
   ${c.bold}13 TOOLS + 1 RESOURCE${c.reset} ${c.dim}(what the AI agent sees)${c.reset}
     ${c.cyan}debug_investigate${c.reset}   ${c.bold}Error in ${sym.arrow} full context out${c.reset} ${c.dim}+ auto-recall + triage${c.reset}

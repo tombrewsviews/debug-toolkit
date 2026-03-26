@@ -12,6 +12,7 @@ import { setCwd, startMcpServer } from "./mcp.js";
 import { exportPack, importPack } from "./packs.js";
 import { installHook, uninstallHook } from "./hook.js";
 import { cleanupFromManifest } from "./cleanup.js";
+import { startActivityFeed } from "./activity.js";
 import { banner, info, success, warn, error, dim, section, kv, printHelp, sym, c, select, spinner } from "./cli.js";
 import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration } from "./adapters.js";
 // --- Parse ---
@@ -749,7 +750,10 @@ async function main() {
             }
             // MCP server runs in a separate process (via .mcp.json config).
             // Don't start it here — stdio is shared with the child dev server.
+            // Live activity feed — shows MCP tool calls in this terminal
+            const activityFeed = startActivityFeed(cwd);
             const cleanup = () => {
+                activityFeed.stop();
                 if (child.pid)
                     treeKill(child.pid, "SIGTERM");
                 proxyHandle?.close();
