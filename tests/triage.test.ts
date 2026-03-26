@@ -5,7 +5,6 @@ describe("Error triage", () => {
   it("should classify missing import as trivial", () => {
     const result = triageError("ReferenceError: foo is not defined\n    at Object.<anonymous> (src/app.ts:5:1)");
     expect(result.level).toBe("trivial");
-    expect(result.skipFullPipeline).toBe(true);
   });
 
   it("should classify syntax error as trivial", () => {
@@ -27,7 +26,6 @@ describe("Error triage", () => {
     at main (src/index.ts:5:1)`;
     const result = triageError(error);
     expect(result.level).toBe("complex");
-    expect(result.skipFullPipeline).toBe(false);
   });
 
   it("should classify ambiguous description as complex", () => {

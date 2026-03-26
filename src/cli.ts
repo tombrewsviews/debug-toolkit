@@ -3,21 +3,9 @@
  * Zero dependencies. Works in any terminal.
  */
 
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { getPackageVersion } from "./utils.js";
 
-function getVersion(): string {
-  try {
-    const dir = dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(readFileSync(join(dir, "..", "package.json"), "utf-8"));
-    return pkg.version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
-
-const VERSION = getVersion();
+const VERSION = getPackageVersion();
 
 const isColor = process.env.NO_COLOR === undefined && process.stderr.isTTY;
 

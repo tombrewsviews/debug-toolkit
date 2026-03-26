@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type DebugSession, saveSession } from "./session.js";
+import { atomicWrite } from "./utils.js";
 
 // --- Marker removal patterns ---
 
@@ -24,9 +25,7 @@ function removeMarkers(content: string): { cleaned: string; hadMarkers: boolean 
 }
 
 function atomicWriteFile(path: string, data: string): void {
-  const tmp = `${path}.dbg_clean_${process.pid}`;
-  writeFileSync(tmp, data);
-  renameSync(tmp, path);
+  atomicWrite(path, data);
 }
 
 // --- Public API ---

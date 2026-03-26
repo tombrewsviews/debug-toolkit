@@ -27,14 +27,18 @@ interface MetricDiff {
 /**
  * Extract Web Vitals from Lighthouse JSON output.
  */
-export function extractMetrics(lighthouseResult: Record<string, any>): LighthouseMetrics {
-  const audits = lighthouseResult?.audits ?? {};
+export function extractMetrics(lighthouseResult: Record<string, unknown>): LighthouseMetrics {
+  const audits = (lighthouseResult?.audits ?? {}) as Record<string, Record<string, unknown>>;
+  const num = (key: string): number | null => {
+    const v = audits[key]?.numericValue;
+    return typeof v === "number" ? v : null;
+  };
   return {
-    lcp: audits["largest-contentful-paint"]?.numericValue ?? null,
-    cls: audits["cumulative-layout-shift"]?.numericValue ?? null,
-    inp: audits["interaction-to-next-paint"]?.numericValue ?? null,
-    tbt: audits["total-blocking-time"]?.numericValue ?? null,
-    speedIndex: audits["speed-index"]?.numericValue ?? null,
+    lcp: num("largest-contentful-paint"),
+    cls: num("cumulative-layout-shift"),
+    inp: num("interaction-to-next-paint"),
+    tbt: num("total-blocking-time"),
+    speedIndex: num("speed-index"),
   };
 }
 

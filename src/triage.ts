@@ -13,9 +13,6 @@ import { classifyError, type ErrorClassification } from "./context.js";
 
 export interface TriageResult {
   level: "trivial" | "medium" | "complex";
-  skipFullPipeline: boolean;
-  skipEnvScan: boolean;
-  skipMemorySearch: boolean;
   fixHint: string | null;
   classification: ErrorClassification;
 }
@@ -53,9 +50,6 @@ export function triageError(errorText: string): TriageResult {
     if (test.test(errorText) && userFrames <= 1) {
       return {
         level: "trivial",
-        skipFullPipeline: true,
-        skipEnvScan: true,
-        skipMemorySearch: true,
         fixHint: hint,
         classification,
       };
@@ -66,9 +60,6 @@ export function triageError(errorText: string): TriageResult {
   if (userFrames === 0 && classification.type === "Unknown") {
     return {
       level: "complex",
-      skipFullPipeline: false,
-      skipEnvScan: false,
-      skipMemorySearch: false,
       fixHint: null,
       classification,
     };
@@ -78,9 +69,6 @@ export function triageError(errorText: string): TriageResult {
   if (userFrames >= 5) {
     return {
       level: "complex",
-      skipFullPipeline: false,
-      skipEnvScan: false,
-      skipMemorySearch: false,
       fixHint: null,
       classification,
     };
@@ -89,9 +77,6 @@ export function triageError(errorText: string): TriageResult {
   // Known error type with some stack → medium
   return {
     level: "medium",
-    skipFullPipeline: false,
-    skipEnvScan: true,
-    skipMemorySearch: false,
     fixHint: classification.suggestion || null,
     classification,
   };

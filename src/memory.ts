@@ -13,7 +13,7 @@
 import { execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { computeConfidence, CONFIDENCE_THRESHOLD, ARCHIVE_THRESHOLD } from "./confidence.js";
+import { computeConfidence, ARCHIVE_THRESHOLD } from "./confidence.js";
 import { memoryPath, walPath, archiveDirPath, atomicWrite, tokenize } from "./utils.js";
 
 // ━━━ Inverted Index Cache ━━━

@@ -37,7 +37,7 @@ import {
   connectToGhostOs, disconnectGhostOs, isGhostConnected, resetConnectionState,
   takeScreenshot, readScreen, findElements, annotateScreen,
 } from "./ghost-bridge.js";
-import { screenshotDir, saveScreenshot } from "./utils.js";
+import { screenshotDir, saveScreenshot, getPackageVersion } from "./utils.js";
 
 let cwd = process.cwd();
 let envCaps: EnvironmentCapabilities | null = null;
@@ -72,7 +72,7 @@ function text(data: unknown) {
 
 export function createMcpServer(): McpServer {
   const server = new McpServer(
-    { name: "debug-toolkit", version: "0.8.0" },
+    { name: "debug-toolkit", version: getPackageVersion() },
     { capabilities: { tools: {}, resources: {} } },
   );
 
@@ -118,6 +118,7 @@ Start every debugging session with this tool.`,
 
     // Triage: classify error complexity
     const triage = triageError(errorText);
+    (session as any)._triageLevel = triage.level;
 
     // Fast-path for trivial errors — skip full pipeline
     if (triage.level === "trivial" && triage.fixHint) {

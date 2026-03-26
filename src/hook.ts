@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 const HOOK_MARKER_START = "# >>> debug-toolkit pre-commit check";
 const HOOK_MARKER_END = "# <<< debug-toolkit pre-commit check";
@@ -26,13 +26,15 @@ export function installHook(cwd: string): { installed: boolean; path: string | n
   // Find .git directory
   let dir = cwd;
   let gitDir: string | null = null;
-  while (dir !== "/") {
+  while (true) {
     const candidate = join(dir, ".git");
     if (existsSync(candidate)) {
       gitDir = candidate;
       break;
     }
-    dir = join(dir, "..");
+    const parent = dirname(dir);
+    if (parent === dir) break; // filesystem root reached
+    dir = parent;
   }
 
   if (!gitDir) {
@@ -81,13 +83,15 @@ export function installHook(cwd: string): { installed: boolean; path: string | n
 export function uninstallHook(cwd: string): { removed: boolean; message: string } {
   let dir = cwd;
   let gitDir: string | null = null;
-  while (dir !== "/") {
+  while (true) {
     const candidate = join(dir, ".git");
     if (existsSync(candidate)) {
       gitDir = candidate;
       break;
     }
-    dir = join(dir, "..");
+    const parent = dirname(dir);
+    if (parent === dir) break; // filesystem root reached
+    dir = parent;
   }
 
   if (!gitDir) {

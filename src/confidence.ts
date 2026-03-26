@@ -36,4 +36,4 @@ export function computeConfidence(factors: ConfidenceFactors): number {
 
 export const CONFIDENCE_THRESHOLD = 0.3;
 export const ARCHIVE_THRESHOLD = 0.2;
-export const PROACTIVE_THRESHOLD = 0.8;
+const PROACTIVE_THRESHOLD = 0.8;

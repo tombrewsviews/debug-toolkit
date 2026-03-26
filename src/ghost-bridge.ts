@@ -9,6 +9,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { execSync } from "node:child_process";
+import { getPackageVersion } from "./utils.js";
 
 let ghostClient: Client | null = null;
 let ghostTransport: StdioClientTransport | null = null;
@@ -42,7 +43,7 @@ export async function connectToGhostOs(): Promise<boolean> {
 
     ghostClient = new Client({
       name: "debug-toolkit",
-      version: "0.10.0",
+      version: getPackageVersion(),
     });
 
     await ghostClient.connect(ghostTransport);

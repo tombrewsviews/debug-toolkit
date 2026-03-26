@@ -56,11 +56,15 @@ export interface ConfidenceExplanation {
 export function explainConfidence(factors: ConfidenceFactors): ConfidenceExplanation {
   const score = computeConfidence(factors);
 
+  // Must match constants in confidence.ts: AGE_HALF_LIFE_DAYS=90, DRIFT_HALF_LIFE_COMMITS=15
   const ageFactor = Math.exp(-Math.LN2 * factors.ageInDays / 90);
-  const driftFactor = Math.exp(-Math.LN2 * factors.fileDriftCommits / 50);
+  const driftFactor = Math.exp(-Math.LN2 * factors.fileDriftCommits / 15);
+  const useRate = factors.timesRecalled > 0
+    ? Math.max(0.0, factors.timesUsed / factors.timesRecalled)
+    : 0.0;
   const usageFactor = factors.timesRecalled > 0
-    ? Math.min(factors.timesUsed / factors.timesRecalled, 1.0)
-    : 0.5;
+    ? 0.3 + 0.7 * useRate
+    : 0.0;
 
   const breakdown = [
     {

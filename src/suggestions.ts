@@ -87,10 +87,11 @@ export function generateSuggestions(patterns: PatternInput[]): Suggestion[] {
     }
 
     if (pattern.type === "error_cluster") {
+      const errors = Array.isArray(data.errors) ? data.errors : [];
       suggestions.push({
         category: "testing",
         priority: "medium",
-        action: `Add integration tests to catch cascading failures — ${Number(data.count ?? 0)} errors occurred within a short window.`,
+        action: `Add integration tests to catch cascading failures — ${errors.length} errors occurred within a short window.`,
         rationale: `Error clusters often indicate cascading failures where one root cause triggers multiple symptoms.`,
       });
     }
