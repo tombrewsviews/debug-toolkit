@@ -265,6 +265,11 @@ function checkStaleness(cwd: string, entry: MemoryEntry): StalenessInfo {
   if (cached && Date.now() < cached.expiresAt) return cached.result;
 
   if (!entry.gitSha || !isValidSha(entry.gitSha)) {
+    // No git SHA means we can't track staleness — treat as potentially stale
+    // Entries without tracked files are low-quality and should be deprioritized
+    if (entry.files.length === 0) {
+      return { stale: true, reason: "No files tracked — cannot verify if fix is still valid", commitsBehind: 0, filesChanged: [] };
+    }
     return { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
   }
 

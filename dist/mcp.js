@@ -234,8 +234,8 @@ Start every debugging session with this tool.`,
             response.nextStep = fresh.length > 0
                 ? `Found ${fresh.length} fresh past solution(s). Review them before investigating further.`
                 : `Found ${pastSolutions.length} past solution(s) but all are outdated (code changed). Investigate fresh.`;
-            // Proactive memory: surface high-confidence matches prominently
-            const highConfidence = pastSolutions.filter((s) => (s.confidence ?? 0) >= 0.8);
+            // Proactive memory: surface high-confidence FRESH matches prominently
+            const highConfidence = pastSolutions.filter((s) => (s.confidence ?? 0) >= 0.8 && !s.staleness.stale);
             if (highConfidence.length > 0) {
                 const top = highConfidence[0];
                 response.proactiveSuggestion = {
@@ -267,6 +267,23 @@ Start every debugging session with this tool.`,
             response.nextStep = typeof response.nextStep === "string"
                 ? `${buildMsg} ${response.nextStep}`
                 : buildMsg;
+        }
+        // Adjust nextStep if runtime context has live errors — prioritize over stale memory
+        if (response.runtimeContext) {
+            const rc = response.runtimeContext;
+            const parts = [];
+            if (rc.terminalErrors)
+                parts.push(`${rc.terminalErrors.length} terminal error(s)/warning(s)`);
+            if (rc.browserConsole)
+                parts.push(`${rc.browserConsole.length} browser console message(s)`);
+            if (rc.tauriLogs)
+                parts.push(`${rc.tauriLogs.length} Tauri log entries`);
+            if (parts.length > 0) {
+                const liveMsg = `Live runtime context captured: ${parts.join(", ")}. Review these first.`;
+                response.nextStep = typeof response.nextStep === "string"
+                    ? `${liveMsg} ${response.nextStep}`
+                    : liveMsg;
+            }
         }
         // Visual error advisory — auto-capture if Ghost OS connected, otherwise advise
         if (visualError) {
