@@ -14,6 +14,12 @@ export function atomicWrite(filePath, data) {
     writeFileSync(tmp, data, { mode: 0o600 });
     renameSync(tmp, filePath);
 }
+export function walPath(cwd) {
+    return join(cwd, ".debug", "memory.wal");
+}
+export function archiveDirPath(cwd) {
+    return join(cwd, ".debug", "archive");
+}
 export function tokenize(text) {
     return text
         .toLowerCase()

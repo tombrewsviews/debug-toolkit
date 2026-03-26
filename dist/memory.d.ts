@@ -31,6 +31,10 @@ export interface CausalLink {
     causeFile: string;
     fixDescription: string;
 }
+interface MemoryStore {
+    version: number;
+    entries: MemoryEntry[];
+}
 /**
  * Check staleness of a memory entry — have the referenced files changed?
  */
@@ -51,6 +55,8 @@ export interface PatternInsight {
  * Cheap — just scans the JSON array, no external calls.
  */
 export declare function detectPatterns(cwd: string): PatternInsight[];
+export declare function loadStore(cwd: string): MemoryStore;
+export declare function saveStore(cwd: string, store: MemoryStore): void;
 /**
  * Save a completed debug session to memory.
  * Auto-captures the current git SHA for staleness tracking.
@@ -75,6 +81,13 @@ export declare function recall(cwd: string, query: string, limit?: number): Arra
 export declare function archiveStaleMemories(cwd: string): {
     archived: number;
 };
+export declare function purgeArchivedEntries(cwd: string): {
+    purged: number;
+};
+export declare function maybeArchive(cwd: string): {
+    archived: number;
+    purged: number;
+};
 /**
  * Get memory stats.
  */
@@ -84,3 +97,4 @@ export declare function memoryStats(cwd: string): {
     newestDate: string | null;
     patterns: PatternInsight[];
 };
+export {};

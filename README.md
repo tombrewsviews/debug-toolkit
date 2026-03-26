@@ -9,6 +9,18 @@ npx debug-toolkit export [path]   # export debug memory as a knowledge pack
 npx debug-toolkit import <path>   # import a knowledge pack into this project
 ```
 
+## What's New in v0.10
+
+- **Write-Ahead Log (WAL)** — Memory mutations (`timesRecalled` increments, archival flags) are appended as single JSON lines instead of rewriting the entire file. Full compaction only runs when the WAL exceeds 50 entries or 100KB. `recall()` went from O(full file I/O) to O(append one line).
+- **Store cache with mtime validation** — `loadStore()` now caches the deserialized store and checks the file's `mtime` before re-reading. Repeated reads in the same session hit memory, not disk.
+- **Multi-project index safety** — The inverted index now uses a per-`cwd` cache map (up to 5 projects) instead of a single global variable. Two projects in the same MCP process no longer share/corrupt each other's search index.
+- **Incremental index updates** — `remember()` adds the new entry's keywords directly to the cached index instead of invalidating and rebuilding from scratch. Full rebuild only happens on WAL compaction.
+- **Staleness TTL cache** — Git staleness checks are cached for 5 minutes per entry. Repeated `recall()` calls within that window skip all `git log` subprocess spawns entirely.
+- **Pattern detection cache** — `detectPatterns()` results are cached by a generation counter that only increments on actual mutations. Calling `debug_patterns` twice without changes returns instantly.
+- **Deferred archival** — `archiveStaleMemories()` moved out of the hot path. It now runs at most once per hour (on MCP startup and `debug_cleanup`), not on every recall/patterns/stats call.
+- **Physical purge** — Archived entries are moved to `.debug/archive/YYYY-MM.json` monthly files and removed from `memory.json`. The main file actually shrinks. `exportPack` can include archived entries with `includeArchived: true`.
+- **Budget overflow guard** — `fitToBudget` now guarantees responses fit the token target. If progressive compression isn't enough, a nuclear option strips everything except preserved keys. The `_budget` metadata includes `overflowHandled: true` when this fires.
+
 ## What's New in v0.9
 
 - **Inverted index recall** — Memory search is now O(1) via a prebuilt inverted index instead of linear scan. The index maps keywords → entry IDs, is cached in-memory, and auto-invalidates on writes. Recall is now instant regardless of memory size.
@@ -330,7 +342,7 @@ debug-toolkit learns from every session:
 ### Run the test suite
 
 ```bash
-npm test                    # 53 tests across 12 files
+npm test                    # 63 tests across 15 files
 npm run test:watch          # watch mode
 ```
 
@@ -401,7 +413,7 @@ Then call `debug_recall` in project B — imported entries should appear with `s
 ```bash
 npx debug-toolkit demo     # full workflow with real bug
 npm run build               # TypeScript compiles clean
-npm test                    # 53 tests pass
+npm test                    # 63 tests pass
 ```
 
 ## Architecture

@@ -3,4 +3,6 @@
  */
 export declare function memoryPath(cwd: string): string;
 export declare function atomicWrite(filePath: string, data: string): void;
+export declare function walPath(cwd: string): string;
+export declare function archiveDirPath(cwd: string): string;
 export declare function tokenize(text: string): string[];

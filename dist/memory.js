@@ -10,13 +10,13 @@
  * Zero native dependencies. Fast enough for hundreds of sessions.
  */
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { computeConfidence, ARCHIVE_THRESHOLD } from "./confidence.js";
-import { memoryPath, atomicWrite, tokenize } from "./utils.js";
-// ━━━ Inverted Index Cache ━━━
-let invertedIndex = null;
-let indexedStorePath = null;
+import { memoryPath, walPath, archiveDirPath, atomicWrite, tokenize } from "./utils.js";
+const indexCacheMap = new Map();
+const MAX_CACHED_PROJECTS = 5;
+let storeGeneration = 0;
 function buildIndex(store) {
     const idx = new Map();
     for (const entry of store.entries) {
@@ -29,16 +29,132 @@ function buildIndex(store) {
     return idx;
 }
 function getIndex(cwd, store) {
-    const p = memoryPath(cwd);
-    if (invertedIndex && indexedStorePath === p)
-        return invertedIndex;
-    invertedIndex = buildIndex(store);
-    indexedStorePath = p;
-    return invertedIndex;
+    const cached = indexCacheMap.get(cwd);
+    if (cached && cached.generation === storeGeneration)
+        return cached.index;
+    const index = buildIndex(store);
+    // LRU eviction
+    if (indexCacheMap.size >= MAX_CACHED_PROJECTS) {
+        const oldest = indexCacheMap.keys().next().value;
+        if (oldest)
+            indexCacheMap.delete(oldest);
+    }
+    indexCacheMap.set(cwd, { index, generation: storeGeneration });
+    return index;
 }
-function invalidateIndex() {
-    invertedIndex = null;
-    indexedStorePath = null;
+function invalidateIndex(cwd) {
+    storeGeneration++;
+    if (cwd) {
+        indexCacheMap.delete(cwd);
+    }
+    else {
+        indexCacheMap.clear();
+    }
+}
+function addToIndex(cwd, entry) {
+    const cached = indexCacheMap.get(cwd);
+    if (!cached)
+        return; // No cache to update; lazy rebuild on next getIndex
+    for (const kw of entry.keywords) {
+        if (!cached.index.has(kw))
+            cached.index.set(kw, new Set());
+        cached.index.get(kw).add(entry.id);
+    }
+    cached.generation = ++storeGeneration;
+    indexCacheMap.set(cwd, cached);
+}
+function removeFromIndex(cwd, entryId) {
+    const cached = indexCacheMap.get(cwd);
+    if (!cached)
+        return;
+    for (const [, idSet] of cached.index) {
+        idSet.delete(entryId);
+    }
+    cached.generation = ++storeGeneration;
+}
+const WAL_COMPACT_LINES = 50;
+const WAL_COMPACT_BYTES = 100 * 1024; // 100 KB
+let storeCache = null;
+function appendWal(cwd, mutation) {
+    const p = walPath(cwd);
+    const dir = dirname(p);
+    if (!existsSync(dir))
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+    appendFileSync(p, JSON.stringify(mutation) + "\n", { mode: 0o600 });
+    // Invalidate store cache so next loadStore re-reads
+    storeCache = null;
+}
+function readWal(cwd) {
+    const p = walPath(cwd);
+    if (!existsSync(p))
+        return [];
+    try {
+        const lines = readFileSync(p, "utf-8").split("\n").filter(Boolean);
+        const mutations = [];
+        for (const line of lines) {
+            try {
+                mutations.push(JSON.parse(line));
+            }
+            catch { /* skip corrupt lines */ }
+        }
+        return mutations;
+    }
+    catch {
+        return [];
+    }
+}
+function replayWal(store, mutations) {
+    for (const m of mutations) {
+        const entry = store.entries.find((e) => e.id === m.entryId);
+        if (!entry && m.op !== "remember")
+            continue;
+        switch (m.op) {
+            case "increment_recalled":
+                if (entry)
+                    entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+                break;
+            case "archive":
+                if (entry)
+                    entry.archived = true;
+                break;
+            case "update":
+                if (entry && m.data)
+                    Object.assign(entry, m.data);
+                break;
+            case "remember":
+                if (!entry && m.data) {
+                    store.entries.push(m.data);
+                }
+                break;
+        }
+    }
+}
+function compactIfNeeded(cwd) {
+    const p = walPath(cwd);
+    if (!existsSync(p))
+        return false;
+    try {
+        const stat = statSync(p);
+        const lineCount = readFileSync(p, "utf-8").split("\n").filter(Boolean).length;
+        if (lineCount >= WAL_COMPACT_LINES || stat.size >= WAL_COMPACT_BYTES) {
+            compactNow(cwd);
+            return true;
+        }
+    }
+    catch { /* ignore */ }
+    return false;
+}
+function compactNow(cwd) {
+    const store = loadStoreBase(cwd);
+    const mutations = readWal(cwd);
+    replayWal(store, mutations);
+    atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
+    try {
+        unlinkSync(walPath(cwd));
+    }
+    catch { /* ignore */ }
+    storeCache = null;
+    invalidateIndex(); // Full invalidation on compaction
 }
 // ━━━ Git helpers ━━━
 function getGitSha(cwd) {
@@ -80,7 +196,13 @@ function batchCommitCounts(cwd, baseSha, files) {
     }
     return counts;
 }
+const stalenessCache = new Map();
+const STALENESS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 function checkStaleness(cwd, entry) {
+    const cacheKey = `${entry.id}:${entry.gitSha ?? "none"}`;
+    const cached = stalenessCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt)
+        return cached.result;
     if (!entry.gitSha || !isValidSha(entry.gitSha)) {
         return { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
     }
@@ -116,20 +238,30 @@ function checkStaleness(cwd, entry) {
             }
         }
     }
-    if (changed.length === 0)
-        return { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
-    return {
+    if (changed.length === 0) {
+        const result = { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
+        stalenessCache.set(cacheKey, { result, expiresAt: Date.now() + STALENESS_TTL_MS });
+        return result;
+    }
+    const result = {
         stale: true,
         reason: `${changed.length} file(s) changed in ${totalCommits} commit(s) since this diagnosis`,
         commitsBehind: totalCommits,
         filesChanged: changed,
     };
+    stalenessCache.set(cacheKey, { result, expiresAt: Date.now() + STALENESS_TTL_MS });
+    return result;
 }
+// ━━━ Pattern Detection Cache ━━━
+let patternCache = null;
 /**
  * Detect patterns across all stored debug sessions.
  * Cheap — just scans the JSON array, no external calls.
  */
 export function detectPatterns(cwd) {
+    if (patternCache && patternCache.cwd === cwd && patternCache.generation === storeGeneration) {
+        return patternCache.patterns;
+    }
     const store = loadStore(cwd);
     if (store.entries.length < 2)
         return [];
@@ -222,10 +354,11 @@ export function detectPatterns(cwd) {
             }
         }
     }
+    patternCache = { cwd, generation: storeGeneration, patterns: insights };
     return insights;
 }
 // ━━━ Paths & Persistence ━━━
-function loadStore(cwd) {
+function loadStoreBase(cwd) {
     const p = memoryPath(cwd);
     if (!existsSync(p))
         return { version: 2, entries: [] };
@@ -253,9 +386,31 @@ function loadStore(cwd) {
         return { version: 2, entries: [] };
     }
 }
-function saveStore(cwd, store) {
+export function loadStore(cwd) {
+    const p = memoryPath(cwd);
+    // Check cache: same cwd and file hasn't changed
+    if (storeCache && storeCache.cwd === cwd) {
+        try {
+            const currentMtime = existsSync(p) ? statSync(p).mtimeMs : 0;
+            if (currentMtime === storeCache.mtime)
+                return storeCache.store;
+        }
+        catch { /* fall through to fresh load */ }
+    }
+    const store = loadStoreBase(cwd);
+    const mutations = readWal(cwd);
+    replayWal(store, mutations);
+    try {
+        const mtime = existsSync(p) ? statSync(p).mtimeMs : 0;
+        storeCache = { cwd, store, mtime };
+    }
+    catch { /* cache miss is fine */ }
+    return store;
+}
+export function saveStore(cwd, store) {
     atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
-    invalidateIndex();
+    storeCache = null;
+    storeGeneration++; // Invalidate index generation but don't clear cache
 }
 // ━━━ Public API ━━━
 /**
@@ -286,6 +441,7 @@ export function remember(cwd, entry) {
         store.entries = store.entries.slice(-200);
     }
     saveStore(cwd, store);
+    addToIndex(cwd, full);
     return full;
 }
 /**
@@ -341,15 +497,16 @@ export function recall(cwd, query, limit = 5) {
         return (b.confidence * b.relevance) - (a.confidence * a.relevance);
     })
         .slice(0, limit);
-    // Increment timesRecalled for matched entries and save
+    // Append recall increments to WAL instead of full store rewrite
     if (results.length > 0) {
         const resultIds = new Set(results.map((r) => r.id));
         for (const entry of store.entries) {
             if (resultIds.has(entry.id)) {
                 entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+                appendWal(cwd, { op: "increment_recalled", entryId: entry.id, ts: new Date().toISOString() });
             }
         }
-        saveStore(cwd, store);
+        compactIfNeeded(cwd);
     }
     return results;
 }
@@ -359,6 +516,7 @@ export function recall(cwd, query, limit = 5) {
  */
 export function archiveStaleMemories(cwd) {
     const store = loadStore(cwd);
+    const alreadyArchived = new Set(store.entries.filter(e => e.archived).map(e => e.id));
     let archived = 0;
     for (const entry of store.entries) {
         if (entry.archived)
@@ -378,16 +536,69 @@ export function archiveStaleMemories(cwd) {
             archived++;
         }
     }
-    if (archived > 0)
-        saveStore(cwd, store);
+    if (archived > 0) {
+        for (const entry of store.entries) {
+            if (entry.archived && !alreadyArchived.has(entry.id)) {
+                appendWal(cwd, { op: "archive", entryId: entry.id, ts: new Date().toISOString() });
+            }
+        }
+        compactIfNeeded(cwd);
+    }
     return { archived };
+}
+// ━━━ Physical Purge ━━━
+export function purgeArchivedEntries(cwd) {
+    const store = loadStore(cwd);
+    const toArchive = store.entries.filter((e) => e.archived);
+    if (toArchive.length === 0)
+        return { purged: 0 };
+    // Group by month
+    const byMonth = new Map();
+    for (const entry of toArchive) {
+        const month = entry.timestamp.slice(0, 7); // YYYY-MM
+        if (!byMonth.has(month))
+            byMonth.set(month, []);
+        byMonth.get(month).push(entry);
+    }
+    // Write to archive files
+    const archDir = archiveDirPath(cwd);
+    if (!existsSync(archDir))
+        mkdirSync(archDir, { recursive: true, mode: 0o700 });
+    for (const [month, entries] of byMonth) {
+        const archFile = join(archDir, `${month}.json`);
+        let existing = { version: 1, entries: [] };
+        if (existsSync(archFile)) {
+            try {
+                existing = JSON.parse(readFileSync(archFile, "utf-8"));
+            }
+            catch { /* start fresh */ }
+        }
+        const existingIds = new Set(existing.entries.map((e) => e.id));
+        for (const e of entries) {
+            if (!existingIds.has(e.id))
+                existing.entries.push(e);
+        }
+        atomicWrite(archFile, JSON.stringify(existing, null, 2));
+    }
+    // Remove archived entries from main store
+    store.entries = store.entries.filter((e) => !e.archived);
+    saveStore(cwd, store);
+    return { purged: toArchive.length };
+}
+// ━━━ Deferred Archival ━━━
+let lastArchivalRun = 0;
+export function maybeArchive(cwd) {
+    if (Date.now() - lastArchivalRun < 60 * 60 * 1000)
+        return { archived: 0, purged: 0 };
+    lastArchivalRun = Date.now();
+    const archResult = archiveStaleMemories(cwd);
+    const purgeResult = purgeArchivedEntries(cwd);
+    return { archived: archResult.archived, purged: purgeResult.purged };
 }
 /**
  * Get memory stats.
  */
 export function memoryStats(cwd) {
-    // Auto-archive stale entries on stats check
-    archiveStaleMemories(cwd);
     const store = loadStore(cwd);
     if (store.entries.length === 0) {
         return { entries: 0, oldestDate: null, newestDate: null, patterns: [] };

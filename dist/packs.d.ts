@@ -27,6 +27,7 @@ export interface PackEntry {
 export declare function exportPack(cwd: string, outPath: string, options?: {
     name?: string;
     filter?: string;
+    includeArchived?: boolean;
 }): {
     path: string;
     entries: number;

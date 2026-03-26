@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureGitignore } from "./security.js";
+import { atomicWrite } from "./utils.js";
 // --- Constants ---
 export const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_CAPTURES = 3000;
@@ -23,11 +24,7 @@ function ensureDirs(cwd) {
     }
     ensureGitignore(cwd);
 }
-function atomicWrite(filePath, data) {
-    const tmp = `${filePath}.tmp_${process.pid}`;
-    writeFileSync(tmp, data, { mode: 0o600 });
-    renameSync(tmp, filePath);
-}
+// atomicWrite imported from utils.ts
 // --- Session CRUD ---
 export function createSession(cwd, problem) {
     ensureDirs(cwd);

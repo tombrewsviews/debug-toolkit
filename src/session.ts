@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureGitignore } from "./security.js";
+import { atomicWrite } from "./utils.js";
 
 // --- Types ---
 
@@ -114,11 +115,7 @@ function ensureDirs(cwd: string): void {
   ensureGitignore(cwd);
 }
 
-function atomicWrite(filePath: string, data: string): void {
-  const tmp = `${filePath}.tmp_${process.pid}`;
-  writeFileSync(tmp, data, { mode: 0o600 });
-  renameSync(tmp, filePath);
-}
+// atomicWrite imported from utils.ts
 
 // --- Session CRUD ---
 

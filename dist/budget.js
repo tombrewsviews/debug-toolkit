@@ -75,7 +75,25 @@ export function fitToBudget(response, opts = {}) {
         delete compressed.gitContext;
         delete compressed.rawStack;
     }
+    // Phase 5 (nuclear): If still over budget, keep only preserved keys
+    if (estimateTokens(compressed) > maxTokens) {
+        for (const key of Object.keys(compressed)) {
+            if (preserveKeys.includes(key))
+                continue;
+            if (key === "_budget")
+                continue;
+            delete compressed[key];
+        }
+    }
     const finalTokens = estimateTokens(compressed);
-    return { ...compressed, _budget: { estimated: finalTokens, target: maxTokens, compressed: true } };
+    return {
+        ...compressed,
+        _budget: {
+            estimated: finalTokens,
+            target: maxTokens,
+            compressed: true,
+            overflowHandled: finalTokens > maxTokens,
+        },
+    };
 }
 //# sourceMappingURL=budget.js.map

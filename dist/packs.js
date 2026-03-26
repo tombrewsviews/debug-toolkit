@@ -4,22 +4,29 @@
  * Export project debug knowledge as shareable JSON packs.
  * Import external packs into a project's memory.
  */
-import { readFileSync, existsSync } from "node:fs";
-import { memoryPath, atomicWrite, tokenize } from "./utils.js";
-function loadStore(cwd) {
-    const p = memoryPath(cwd);
-    if (!existsSync(p))
-        return { version: 2, entries: [] };
-    try {
-        return JSON.parse(readFileSync(p, "utf-8"));
-    }
-    catch {
-        return { version: 2, entries: [] };
-    }
-}
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWrite, archiveDirPath, tokenize } from "./utils.js";
+import { loadStore, saveStore } from "./memory.js";
+// loadStore and saveStore imported from memory.ts — single codepath for all store access
 export function exportPack(cwd, outPath, options) {
     const store = loadStore(cwd);
-    let entries = store.entries;
+    let entries = [...store.entries];
+    if (options?.includeArchived) {
+        const archDir = archiveDirPath(cwd);
+        if (existsSync(archDir)) {
+            for (const file of readdirSync(archDir)) {
+                if (!file.endsWith(".json"))
+                    continue;
+                try {
+                    const arch = JSON.parse(readFileSync(join(archDir, file), "utf-8"));
+                    if (Array.isArray(arch.entries))
+                        entries.push(...arch.entries);
+                }
+                catch { /* skip corrupt archive files */ }
+            }
+        }
+    }
     if (options?.filter) {
         const f = options.filter.toLowerCase();
         entries = entries.filter((e) => String(e.category ?? "").toLowerCase().includes(f) ||
@@ -78,7 +85,7 @@ export function importPack(cwd, packPath) {
         existingKeys.add(key);
         imported++;
     }
-    atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
+    saveStore(cwd, store);
     return { imported, total: store.entries.length };
 }
 //# sourceMappingURL=packs.js.map

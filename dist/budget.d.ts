@@ -21,5 +21,6 @@ export declare function fitToBudget<T extends Record<string, unknown>>(response:
         estimated: number;
         target: number;
         compressed: boolean;
+        overflowHandled?: boolean;
     };
 };
