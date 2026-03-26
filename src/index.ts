@@ -3,7 +3,7 @@
 import { spawn, execSync } from "node:child_process";
 import { resolve, join, dirname } from "node:path";
 import { createInterface } from "node:readline";
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, rmdirSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -12,7 +12,7 @@ import { pipeProcess } from "./capture.js";
 import { startProxy, detectPort } from "./proxy.js";
 import { setCwd, startMcpServer } from "./mcp.js";
 import { exportPack, importPack } from "./packs.js";
-import { installHook } from "./hook.js";
+import { installHook, uninstallHook } from "./hook.js";
 import { cleanupFromManifest } from "./cleanup.js";
 import { banner, info, success, warn, error, dim, section, kv, ready, printHelp, sym, c, select, spinner, type SelectOption } from "./cli.js";
 import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration, type EnvironmentCapabilities } from "./adapters.js";
@@ -23,7 +23,7 @@ function parseArgs(argv: string[]) {
   const args = argv.slice(2);
   const cmd = args[0] ?? "mcp"; // DEFAULT: pure MCP server (zero-config!)
 
-  if (["clean", "init", "install", "doctor", "demo", "help", "--help", "-h", "mcp", "export", "import"].includes(cmd)) {
+  if (["clean", "init", "install", "uninstall", "doctor", "demo", "help", "--help", "-h", "mcp", "export", "import"].includes(cmd)) {
     return { command: cmd.replace(/^-+/, ""), port: null as number | null, childCommand: [] as string[] };
   }
   if (cmd !== "serve") return { command: "mcp", port: null as number | null, childCommand: [] as string[] };
@@ -745,6 +745,69 @@ async function main(): Promise<void> {
         if (!r.verified) for (const e of r.errors) error(e);
       }
       process.exit(r.verified ? 0 : 1);
+      break;
+    }
+
+    case "uninstall": {
+      banner();
+      section("UNINSTALL");
+      info("Removing debug-toolkit from this project...\n");
+
+      let removed = 0;
+
+      // 1. Remove MCP config entries
+      for (const p of [join(cwd, ".mcp.json"), join(cwd, ".claude", "mcp.json")]) {
+        if (existsSync(p)) {
+          try {
+            const config = JSON.parse(readFileSync(p, "utf-8"));
+            const servers = config.mcpServers as Record<string, unknown> | undefined;
+            if (servers?.["debug-toolkit"]) {
+              delete servers["debug-toolkit"];
+              writeFileSync(p, JSON.stringify(config, null, 2));
+              success(`Removed debug-toolkit from ${p.replace(cwd + "/", "")}`);
+              removed++;
+            }
+          } catch { /* skip */ }
+        }
+      }
+
+      // 2. Remove activation rules
+      const rulesPath = join(cwd, ".claude", "rules", "debug-toolkit.md");
+      if (existsSync(rulesPath)) {
+        unlinkSync(rulesPath);
+        success("Removed activation rules");
+        removed++;
+      }
+
+      // 3. Remove SKILL.md
+      const skillDir = join(cwd, ".claude", "skills", "debug-toolkit");
+      if (existsSync(skillDir)) {
+        for (const f of readdirSync(skillDir)) unlinkSync(join(skillDir, f));
+        rmdirSync(skillDir);
+        success("Removed SKILL.md");
+        removed++;
+      }
+
+      // 4. Remove pre-commit hook
+      const hookResult = uninstallHook(cwd);
+      if (hookResult.removed) {
+        success("Removed pre-commit hook");
+        removed++;
+      }
+
+      // 5. Note about .debug/ directory
+      if (existsSync(join(cwd, ".debug"))) {
+        info("");
+        dim(`  ${c.yellow}Note:${c.reset} .debug/ directory preserved (contains debug memory and telemetry).`);
+        dim(`  To delete: ${c.reset}rm -rf .debug/${c.dim}`);
+      }
+
+      info("");
+      if (removed > 0) {
+        success(`debug-toolkit removed. Restart Claude Code to apply changes.`);
+      } else {
+        dim("Nothing to remove — debug-toolkit was not configured in this project.");
+      }
       break;
     }
 

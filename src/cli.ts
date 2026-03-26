@@ -259,6 +259,7 @@ export function printHelp(): void {
     serve             start dev server with browser capture (auto-detects dev command)
     export [path]     export debug memory to a portable knowledge pack
     import <path>     import a knowledge pack into this project
+    uninstall         remove debug-toolkit from this project (preserves .debug/)
     demo              self-contained demo (no AI needed)
 
   ${c.bold}TWO MODES${c.reset}

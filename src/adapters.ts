@@ -331,8 +331,8 @@ function configureGhostOs(cwd: string): void {
   const servers = config.mcpServers as Record<string, unknown>;
   if (!servers["ghost-os"]) {
     servers["ghost-os"] = {
-      command: "ghost-os",
-      args: ["--mcp"],
+      command: "ghost",
+      args: ["mcp"],
     };
     atomicWrite(mcpPath, JSON.stringify(config, null, 2));
   }

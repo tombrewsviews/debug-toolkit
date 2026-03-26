@@ -16,7 +16,7 @@ let connectionAttempted = false;
 
 function findGhostBinary(): string | null {
   try {
-    const path = execSync("which ghost-os 2>/dev/null || which ghost 2>/dev/null", {
+    const path = execSync("which ghost 2>/dev/null || which ghost-os 2>/dev/null", {
       stdio: "pipe",
       timeout: 3000,
     }).toString().trim();
@@ -37,7 +37,7 @@ export async function connectToGhostOs(): Promise<boolean> {
   try {
     ghostTransport = new StdioClientTransport({
       command: binary,
-      args: ["--mcp"],  // Ghost OS MCP mode
+      args: ["mcp"],  // Ghost OS MCP mode
     });
 
     ghostClient = new Client({
