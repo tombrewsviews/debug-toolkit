@@ -11,10 +11,10 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { computeConfidence, CONFIDENCE_THRESHOLD, ARCHIVE_THRESHOLD } from "./confidence.js";
-import { memoryPath, atomicWrite, tokenize } from "./utils.js";
+import { memoryPath, walPath, atomicWrite, tokenize } from "./utils.js";
 
 // ━━━ Inverted Index Cache ━━━
 
@@ -43,6 +43,90 @@ function getIndex(cwd: string, store: MemoryStore): Map<string, Set<string>> {
 function invalidateIndex(): void {
   invertedIndex = null;
   indexedStorePath = null;
+}
+
+// ━━━ Write-Ahead Log ━━━
+
+interface WalMutation {
+  op: "increment_recalled" | "remember" | "archive" | "update";
+  entryId: string;
+  data?: Record<string, unknown>;
+  ts: string;
+}
+
+const WAL_COMPACT_LINES = 50;
+const WAL_COMPACT_BYTES = 100 * 1024; // 100 KB
+
+let storeCache: { cwd: string; store: MemoryStore; mtime: number } | null = null;
+
+function appendWal(cwd: string, mutation: WalMutation): void {
+  const p = walPath(cwd);
+  const dir = dirname(p);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  appendFileSync(p, JSON.stringify(mutation) + "\n", { mode: 0o600 });
+  // Invalidate store cache so next loadStore re-reads
+  storeCache = null;
+}
+
+function readWal(cwd: string): WalMutation[] {
+  const p = walPath(cwd);
+  if (!existsSync(p)) return [];
+  try {
+    const lines = readFileSync(p, "utf-8").split("\n").filter(Boolean);
+    const mutations: WalMutation[] = [];
+    for (const line of lines) {
+      try { mutations.push(JSON.parse(line)); } catch { /* skip corrupt lines */ }
+    }
+    return mutations;
+  } catch { return []; }
+}
+
+function replayWal(store: MemoryStore, mutations: WalMutation[]): void {
+  for (const m of mutations) {
+    const entry = store.entries.find((e) => e.id === m.entryId);
+    if (!entry && m.op !== "remember") continue;
+
+    switch (m.op) {
+      case "increment_recalled":
+        if (entry) entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+        break;
+      case "archive":
+        if (entry) entry.archived = true;
+        break;
+      case "update":
+        if (entry && m.data) Object.assign(entry, m.data);
+        break;
+      case "remember":
+        if (!entry && m.data) {
+          store.entries.push(m.data as unknown as MemoryEntry);
+        }
+        break;
+    }
+  }
+}
+
+function compactIfNeeded(cwd: string): boolean {
+  const p = walPath(cwd);
+  if (!existsSync(p)) return false;
+  try {
+    const stat = statSync(p);
+    const lineCount = readFileSync(p, "utf-8").split("\n").filter(Boolean).length;
+    if (lineCount >= WAL_COMPACT_LINES || stat.size >= WAL_COMPACT_BYTES) {
+      compactNow(cwd);
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+function compactNow(cwd: string): void {
+  const store = loadStoreBase(cwd);
+  const mutations = readWal(cwd);
+  replayWal(store, mutations);
+  atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
+  try { unlinkSync(walPath(cwd)); } catch { /* ignore */ }
+  storeCache = null;
+  invalidateIndex();
 }
 
 // ━━━ Types ━━━
@@ -294,7 +378,7 @@ export function detectPatterns(cwd: string): PatternInsight[] {
 
 // ━━━ Paths & Persistence ━━━
 
-function loadStore(cwd: string): MemoryStore {
+function loadStoreBase(cwd: string): MemoryStore {
   const p = memoryPath(cwd);
   if (!existsSync(p)) return { version: 2, entries: [] };
   try {
@@ -316,8 +400,31 @@ function loadStore(cwd: string): MemoryStore {
   }
 }
 
-function saveStore(cwd: string, store: MemoryStore): void {
+export function loadStore(cwd: string): MemoryStore {
+  const p = memoryPath(cwd);
+  // Check cache: same cwd and file hasn't changed
+  if (storeCache && storeCache.cwd === cwd) {
+    try {
+      const currentMtime = existsSync(p) ? statSync(p).mtimeMs : 0;
+      if (currentMtime === storeCache.mtime) return storeCache.store;
+    } catch { /* fall through to fresh load */ }
+  }
+
+  const store = loadStoreBase(cwd);
+  const mutations = readWal(cwd);
+  replayWal(store, mutations);
+
+  try {
+    const mtime = existsSync(p) ? statSync(p).mtimeMs : 0;
+    storeCache = { cwd, store, mtime };
+  } catch { /* cache miss is fine */ }
+
+  return store;
+}
+
+export function saveStore(cwd: string, store: MemoryStore): void {
   atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
+  storeCache = null;
   invalidateIndex();
 }
 
@@ -426,15 +533,16 @@ export function recall(
     })
     .slice(0, limit);
 
-  // Increment timesRecalled for matched entries and save
+  // Append recall increments to WAL instead of full store rewrite
   if (results.length > 0) {
     const resultIds = new Set(results.map((r) => r.id));
     for (const entry of store.entries) {
       if (resultIds.has(entry.id)) {
         entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+        appendWal(cwd, { op: "increment_recalled", entryId: entry.id, ts: new Date().toISOString() });
       }
     }
-    saveStore(cwd, store);
+    compactIfNeeded(cwd);
   }
 
   return results;
@@ -446,6 +554,7 @@ export function recall(
  */
 export function archiveStaleMemories(cwd: string): { archived: number } {
   const store = loadStore(cwd);
+  const alreadyArchived = new Set(store.entries.filter(e => e.archived).map(e => e.id));
   let archived = 0;
 
   for (const entry of store.entries) {
@@ -467,7 +576,14 @@ export function archiveStaleMemories(cwd: string): { archived: number } {
     }
   }
 
-  if (archived > 0) saveStore(cwd, store);
+  if (archived > 0) {
+    for (const entry of store.entries) {
+      if (entry.archived && !alreadyArchived.has(entry.id)) {
+        appendWal(cwd, { op: "archive", entryId: entry.id, ts: new Date().toISOString() });
+      }
+    }
+    compactIfNeeded(cwd);
+  }
   return { archived };
 }
 
