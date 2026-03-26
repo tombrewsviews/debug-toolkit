@@ -243,7 +243,6 @@ export function printHelp(): void {
     ${c.dim}(no args)${c.reset}         guided setup (interactive) or MCP server (non-interactive)
     init              non-interactive setup (writes .mcp.json, hooks, rules)
     doctor            check environment + optional integrations
-    install           enable optional capabilities (Lighthouse, Chrome, Ghost OS)
     serve             start dev server with browser capture (auto-detects dev command)
     export [path]     export debug memory to a portable knowledge pack
     import <path>     import a knowledge pack into this project

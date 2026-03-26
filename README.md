@@ -25,7 +25,6 @@ npx debug-toolkit
 
 ```
 npx debug-toolkit init            # non-interactive setup
-npx debug-toolkit install         # install optional integrations (Lighthouse, Chrome)
 npx debug-toolkit doctor          # check environment + optional integrations
 npx debug-toolkit demo            # see it work (no AI needed)
 npx debug-toolkit export [path]   # export debug memory as a knowledge pack
@@ -88,30 +87,7 @@ Without Ghost OS, all visual features gracefully fall back to advisory hints.
 
 ### Installing Integrations
 
-**From the terminal:**
-```bash
-npx debug-toolkit install
-```
-
-Shows available integrations, marks which can be auto-installed vs manual-only, and lets you pick:
-
-```
-  AVAILABLE INTEGRATIONS
-    1) Lighthouse [auto] — Performance profiling (Web Vitals)
-       npm install -g lighthouse
-    2) Chrome [auto] — Required for Lighthouse headless testing
-       brew install --cask google-chrome
-    3) Ghost OS [auto] — Visual debugging — screenshots, DOM capture (macOS)
-       brew install ghostwright/ghost-os/ghost-os
-
-    a) Install all auto-installable (Lighthouse, Chrome, Ghost OS)
-
-  Select (numbers comma-separated, 'a' for all, Enter to skip):
-```
-
-**From the agent (mid-conversation):**
-
-The agent can check and install integrations without the user leaving the chat, via the `debug_setup` MCP tool:
+Optional integrations (Lighthouse, Chrome, Ghost OS) are auto-installed during `npx debug-toolkit` setup. The agent can also check and install them mid-conversation via the `debug_setup` MCP tool:
 
 ```
 debug_setup({ action: "check" })
@@ -556,14 +532,13 @@ src/
 - `debug_visual` tool — screenshot, inspect, annotate, before/after compare
 - Auto-capture on visual bugs (configurable: auto/manual/off)
 - Before/after screenshot comparison on `debug_verify`
-- Ghost OS brew-installable on macOS via `npx debug-toolkit install`
+- Ghost OS brew-installable on macOS (auto-installed during setup)
 - Write-Ahead Log eliminates full JSON rewrite on every recall
 - Store cache with mtime validation, multi-project index safety
 - Incremental index updates, staleness TTL cache, pattern detection cache
 - Deferred archival (1hr cooldown), physical purge to monthly archive files
 - Budget overflow guard with nuclear fallback
 - `npx debug-toolkit doctor` — environment health check
-- `npx debug-toolkit install` — interactive integration installer
 - `debug_setup` MCP tool — check/install/connect/disconnect integrations
 - Guided interactive setup via `npx debug-toolkit` (TTY-aware)
 - Capability-aware runtime adapts to what's installed

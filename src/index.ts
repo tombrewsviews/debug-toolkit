@@ -14,7 +14,7 @@ import { setCwd, startMcpServer } from "./mcp.js";
 import { exportPack, importPack } from "./packs.js";
 import { installHook, uninstallHook } from "./hook.js";
 import { cleanupFromManifest } from "./cleanup.js";
-import { banner, info, success, warn, error, dim, section, kv, ready, printHelp, sym, c, select, spinner, type SelectOption } from "./cli.js";
+import { banner, info, success, warn, error, dim, section, kv, printHelp, sym, c, select, spinner, type SelectOption } from "./cli.js";
 import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration, type EnvironmentCapabilities } from "./adapters.js";
 
 // --- Parse ---
@@ -23,7 +23,7 @@ function parseArgs(argv: string[]) {
   const args = argv.slice(2);
   const cmd = args[0] ?? "mcp"; // DEFAULT: pure MCP server (zero-config!)
 
-  if (["clean", "init", "install", "uninstall", "doctor", "demo", "help", "--help", "-h", "mcp", "export", "import"].includes(cmd)) {
+  if (["clean", "init", "uninstall", "doctor", "demo", "help", "--help", "-h", "mcp", "export", "import"].includes(cmd)) {
     return { command: cmd.replace(/^-+/, ""), port: null as number | null, childCommand: [] as string[] };
   }
   if (cmd !== "serve") return { command: "mcp", port: null as number | null, childCommand: [] as string[] };
@@ -602,100 +602,6 @@ async function guidedImport(cwd: string): Promise<void> {
 
 // --- Install ---
 
-async function installCommand(cwd: string): Promise<void> {
-  const caps = detectEnvironment(cwd);
-  const integrations = listInstallable(caps);
-  const available = integrations.filter((i) => i.available);
-  const missing = integrations.filter((i) => !i.available);
-  const installable = missing.filter((i) => i.autoInstallable);
-
-  // Show what's already enabled
-  if (available.length > 0) {
-    section("ENABLED");
-    for (const intg of available) {
-      success(`${c.bold}${intg.capability.split("—")[0].trim()}${c.reset} ${c.dim}(${intg.packageName})${c.reset}`);
-    }
-  }
-
-  // Claude Preview note
-  info("");
-  dim("  Claude Code Preview is supported automatically when using Claude Code desktop.");
-
-  if (missing.length === 0) {
-    info("");
-    success("All capabilities are enabled!");
-    return;
-  }
-
-  // Build selector options — "Enable all" first, then individual
-  const selectorOptions: SelectOption[] = [];
-
-  if (installable.length > 1) {
-    const totalSize = installable.map((i) => i.diskSize).join(" + ");
-    selectorOptions.push({
-      label: `Enable all capabilities (${installable.map((i) => i.name).join(", ")})`,
-      desc: `Installs everything needed for full performance + visual debugging.`,
-      detail: `Disk space: ${totalSize}. All open-source. Remove anytime with npm/brew uninstall.`,
-    });
-  }
-
-  for (const intg of missing) {
-    if (intg.autoInstallable) {
-      selectorOptions.push({
-        label: intg.capability.split("—")[0].trim(),
-        desc: `${intg.packageName} — ${intg.description}`,
-        detail: `Runs: ${c.dim}${intg.installCommand}${c.reset} (${intg.diskSize})`,
-      });
-    } else {
-      selectorOptions.push({
-        label: intg.capability.split("—")[0].trim(),
-        desc: `${intg.packageName} — ${intg.description}`,
-        detail: `${c.yellow}Manual:${c.reset} ${intg.manualSteps}`,
-      });
-    }
-  }
-
-  selectorOptions.push({
-    label: "Skip for now",
-    desc: "You can enable these anytime from this menu.",
-    detail: "",
-  });
-
-  section("CAPABILITIES TO ENABLE");
-  info("");
-  const choice = await select("What would you like to enable?", selectorOptions);
-
-  if (choice === -1 || choice === selectorOptions.length - 1) {
-    // Esc or "Skip for now"
-    return;
-  }
-
-  let toInstall: typeof missing;
-  if (installable.length > 1 && choice === 0) {
-    // "Enable all"
-    toInstall = installable;
-  } else {
-    // Individual choice — offset by 1 if "Enable all" was shown
-    const offset = installable.length > 1 ? 1 : 0;
-    const intg = missing[choice - offset];
-    if (!intg || !intg.autoInstallable) {
-      warn(`${missing[choice - offset]?.name ?? "This"} requires manual setup.`);
-      return;
-    }
-    toInstall = [intg];
-  }
-
-  info("");
-  for (const intg of toInstall) {
-    const sp = spinner(`Installing ${intg.name}...`);
-    const result = installIntegration(intg.id, cwd);
-    if (result.success) {
-      sp.stop(`${c.green}${sym.check}${c.reset} ${result.message}`);
-    } else {
-      sp.stop(`${c.yellow}${sym.bolt}${c.reset} ${result.message}`);
-    }
-  }
-}
 
 // --- Main ---
 
@@ -717,7 +623,7 @@ async function main(): Promise<void> {
 
     case "doctor": doctorCommand(cwd); break;
 
-    case "install": await installCommand(cwd); break;
+    // "install" removed — integrations are auto-installed during init/setup
 
     case "export": {
       const outPath = process.argv[3] ?? join(cwd, ".debug", "knowledge-pack.json");
@@ -865,8 +771,8 @@ async function main(): Promise<void> {
         }
       }
 
-      startMcpServer().catch((e) => error(`MCP: ${e}`));
-      ready(8);
+      // MCP server runs in a separate process (via .mcp.json config).
+      // Don't start it here — stdio is shared with the child dev server.
 
       const cleanup = () => {
         if (child.pid) treeKill(child.pid, "SIGTERM");

@@ -265,7 +265,7 @@ Start every debugging session with this tool.`,
                     ? "Visual/CSS bug detected. Screenshot captured automatically."
                     : tools.length > 0
                         ? `Visual/CSS bug detected. Use ${tools[0]} to capture the current state.`
-                        : "Visual/CSS bug detected. Run 'npx debug-toolkit install' for visual debugging.",
+                        : "Visual/CSS bug detected. Use debug_setup action='install' integration='ghost-os' for visual debugging.",
                 suggestedActions: isGhostConnected()
                     ? ["Screenshot already captured", "Use debug_visual for more captures"]
                     : tools.length > 0
@@ -768,7 +768,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
         if (action === "connect") {
             resetConnectionState();
             const connected = await connectToGhostOs();
-            return text({ connected, message: connected ? "Ghost OS connected successfully" : "Ghost OS not available — install with 'npx debug-toolkit install'" });
+            return text({ connected, message: connected ? "Ghost OS connected successfully" : "Ghost OS not available — use debug_setup action='install' integration='ghost-os'" });
         }
         if (action === "disconnect") {
             await disconnectGhostOs();
@@ -819,7 +819,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
         if (!isGhostConnected()) {
             return text({
                 error: "Ghost OS is not connected.",
-                setup: "npx debug-toolkit install",
+                setup: "Use debug_setup action='install' integration='ghost-os'",
                 hint: "Ghost OS provides visual debugging — screenshots, DOM capture, element inspection.",
             });
         }
