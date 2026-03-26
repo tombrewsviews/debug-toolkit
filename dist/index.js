@@ -421,13 +421,8 @@ function buildMenuOptions(cwd) {
     const devCmd = detectDevCommand(cwd);
     return [
         {
-            label: "Enable more capabilities",
-            desc: "Add performance profiling and visual debugging to your agent's toolkit.",
-            detail: "Checks what's missing and lets you enable it. ~200MB total, removable anytime.",
-        },
-        {
             label: "Start dev server with capture",
-            desc: `Runs ${c.bold}${devCmd}${c.reset} with browser console, network, and build error capture.`,
+            desc: `Runs ${devCmd} with browser console, network, and build error capture.`,
             detail: "Launches behind an HTTP proxy with auto-capture. Stop anytime with Ctrl+C.",
         },
         {
@@ -448,7 +443,7 @@ async function guidedSetup(cwd) {
     // Check if already initialized
     const mcpExists = existsSync(join(cwd, ".mcp.json")) || existsSync(join(cwd, ".claude", "mcp.json"));
     if (mcpExists) {
-        info(`${c.dim}Already set up in this project. Ready to use in Claude Code.${c.reset}\n`);
+        success(`Already set up in this project. Ready to use in Claude Code.\n`);
         await mainMenu(cwd);
         return;
     }
@@ -470,34 +465,50 @@ async function guidedSetup(cwd) {
     }
     // Run the full init
     initCommand(cwd);
-    // Offer optional installs
+    // Auto-install all available integrations
     const capsAfterInit = detectEnvironment(cwd);
     const missing = listInstallable(capsAfterInit).filter((i) => !i.available);
-    const autoMissing = missing.filter((i) => i.autoInstallable);
-    if (autoMissing.length > 0) {
+    const autoInstallable = missing.filter((i) => i.autoInstallable);
+    if (autoInstallable.length > 0) {
         info("");
-        const installAll = await ask(`  ${c.dim}Install optional integrations (${autoMissing.map((i) => i.name).join(", ")})? (y/N): ${c.reset}`);
-        if (installAll.toLowerCase() === "y") {
-            for (const intg of autoMissing) {
-                info(`Installing ${c.bold}${intg.name}${c.reset}...`);
-                const result = installIntegration(intg.id, cwd);
-                if (result.success)
-                    success(result.message);
-                else
-                    warn(result.message);
-            }
+        info(`Enabling additional capabilities...`);
+        for (const intg of autoInstallable) {
+            dim(`  ${intg.installCommand}`);
+            const result = installIntegration(intg.id, cwd);
+            if (result.success)
+                success(`${intg.capability.split("—")[0].trim()}`);
+            else
+                warn(`${intg.name}: ${result.message}`);
         }
     }
+    // Show capability summary
+    info("");
+    section("YOUR AGENT CAN NOW");
+    success("Investigate errors — classify, locate source, show git context");
+    success("Instrument code — add conditional logging in JS/TS, Python, Go, Rust");
+    success("Capture runtime output — terminal, browser console, build errors");
+    success("Verify fixes — run tests, confirm pass/fail");
+    success("Learn from every fix — recall past solutions, detect patterns");
+    // Check what was installed
+    const capsAfterInstall = detectEnvironment(cwd);
+    const allIntegrations = listInstallable(capsAfterInstall);
+    if (allIntegrations.find((i) => i.id === "lighthouse")?.available) {
+        success("Profile performance — Lighthouse Web Vitals before/after comparison");
+    }
+    if (allIntegrations.find((i) => i.id === "ghost-os")?.available) {
+        success("Debug visually — auto-capture screenshots, inspect DOM elements");
+    }
+    dim("");
+    dim("  Claude Code Preview is supported automatically in Claude Code desktop.");
     const manualOnly = missing.filter((i) => !i.autoInstallable);
     if (manualOnly.length > 0) {
-        info("");
         for (const intg of manualOnly) {
             dim(`  ${intg.name}: ${intg.manualSteps}`);
         }
     }
     // After setup, show menu for next steps
     info("");
-    info(`${c.green}Setup complete!${c.reset} Choose what to do next, or press ${c.dim}Esc${c.reset} to exit.\n`);
+    success(`Setup complete! Choose what to do next, or press ${c.dim}Esc${c.reset} to exit.\n`);
     await mainMenu(cwd);
 }
 async function mainMenu(cwd) {
@@ -511,15 +522,12 @@ async function mainMenu(cwd) {
         }
         switch (choice) {
             case 0:
-                await installCommand(cwd);
-                break;
-            case 1:
                 await guidedServe(cwd);
                 return; // serve takes over, don't loop
-            case 2:
+            case 1:
                 doctorCommand(cwd);
                 break;
-            case 3:
+            case 2:
                 initCommand(cwd);
                 break;
         }

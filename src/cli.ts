@@ -119,11 +119,11 @@ export function select(prompt: string, options: SelectOption[]): Promise<number>
 
   return new Promise((resolve) => {
     let selected = 0;
-    const totalLines = options.length * 3 + 1; // 3 lines per option + prompt
+    // 4 lines per option (label + desc + detail + blank separator) + 1 prompt line
+    const totalLines = options.length * 4 + 1;
 
     function render(first = false): void {
       if (!first) {
-        // Move cursor up to overwrite previous render
         process.stderr.write(c.moveUp(totalLines));
       }
       process.stderr.write(`${c.clearLine}  ${c.bold}${prompt}${c.reset} ${c.dim}(↑↓ to move, enter to select)${c.reset}\n`);
@@ -131,12 +131,11 @@ export function select(prompt: string, options: SelectOption[]): Promise<number>
         const opt = options[i];
         const isSel = i === selected;
         const pointer = isSel ? `${c.cyan}${sym.pointer}${c.reset}` : " ";
-        const label = isSel ? `${c.bold}${c.white}${opt.label}${c.reset}` : `${c.dim}${opt.label}${c.reset}`;
-        const desc = isSel ? `${c.white}${opt.desc}${c.reset}` : `${c.dim}${opt.desc}${c.reset}`;
-        const detail = isSel ? `${c.dim}${opt.detail}${c.reset}` : "";
+        const label = isSel ? `${c.bold}${c.white}${opt.label}${c.reset}` : `  ${opt.label}`;
         process.stderr.write(`${c.clearLine}  ${pointer} ${label}\n`);
-        process.stderr.write(`${c.clearLine}    ${desc}\n`);
-        process.stderr.write(`${c.clearLine}    ${detail}\n`);
+        process.stderr.write(`${c.clearLine}    ${c.dim}${opt.desc}${c.reset}\n`);
+        process.stderr.write(`${c.clearLine}    ${c.dim}${opt.detail}${c.reset}\n`);
+        process.stderr.write(`${c.clearLine}\n`); // blank separator line
       }
     }
 
@@ -150,19 +149,15 @@ export function select(prompt: string, options: SelectOption[]): Promise<number>
 
     function onData(key: string): void {
       if (key === "\x1b[A") {
-        // Up arrow
         selected = (selected - 1 + options.length) % options.length;
         render();
       } else if (key === "\x1b[B") {
-        // Down arrow
         selected = (selected + 1) % options.length;
         render();
       } else if (key === "\r" || key === "\n") {
-        // Enter
         cleanup();
         resolve(selected);
       } else if (key === "\x03" || key === "\x1b") {
-        // Ctrl+C or Escape
         cleanup();
         resolve(-1);
       }
