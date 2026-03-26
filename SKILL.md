@@ -1,16 +1,28 @@
 ---
 name: debug-toolkit
-description: "Debugging toolkit with runtime context capture. MUST use for: any bug, error, issue, warning, crash, panic, layout problem, visual glitch, wrong behavior, performance issue, test failure, code review of running app, checking app health, reviewing errors, investigating issues. Call debug_investigate FIRST — never grep/read code manually for debugging."
+description: "Debugging toolkit with runtime context capture. MUST use for: any bug, error, issue, warning, crash, panic, layout problem, visual glitch, wrong behavior, performance issue, test failure, code review of running app, checking app health, reviewing errors, investigating issues. Read debug://status for live app state. Call debug_investigate for deep analysis."
 tools: ["debug_investigate", "debug_recall", "debug_patterns", "debug_instrument", "debug_capture", "debug_verify", "debug_cleanup", "debug_session", "debug_perf", "debug_visual", "debug_setup"]
 ---
 
 # debug-toolkit
 
-A debugging toolkit via MCP that captures what's actually happening at runtime — terminal output, browser console, build errors, screenshots, performance metrics, and cross-session memory. It sees what you can't see by just reading code.
+A debugging toolkit via MCP that captures what's actually happening at runtime — terminal output, browser console, build errors, screenshots, performance metrics, and cross-session memory.
+
+## Live Status: debug://status
+
+**Read the `debug://status` resource to see what's happening right now.** It shows:
+- Terminal errors/warnings (Rust panics, compiler warnings)
+- Browser console errors (console.error, failed fetches, IPC errors)
+- Build errors (Vite, tsc, webpack, ESLint)
+- Tauri logs
+- Active debug sessions
+
+This is pre-processed and always current (updated every 5 seconds by the dev server).
+Read it BEFORE investigating — it tells you what's wrong without any tool call.
 
 ## When to Activate
 
-Call `debug_investigate` as your FIRST action when the user mentions ANY of these:
+Call `debug_investigate` for deep analysis when the user mentions ANY of these:
 
 **Direct triggers** — the user says:
 - "bug", "error", "issue", "warning", "crash", "panic", "exception"

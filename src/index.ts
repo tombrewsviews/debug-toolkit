@@ -244,52 +244,55 @@ function initCommand(cwd: string): void {
   const rulesPath = join(rulesDir, "debug-toolkit.md");
   writeFileSync(rulesPath, `# debug-toolkit — activation rules
 
-## MANDATORY: Call debug_investigate as your FIRST tool call for ANY bug
+## Step 1: Read debug://status for live app state
 
-When the user reports a bug, error, issue, or asks you to review/check/fix anything:
+The \`debug://status\` MCP resource shows what's happening RIGHT NOW:
+- Terminal errors/warnings (Rust panics, compiler warnings)
+- Browser console errors (console.error, IPC failures, failed fetches)
+- Build errors (Vite, tsc, webpack, ESLint)
+- Tauri logs
+- Active debug sessions
 
-1. Call debug_investigate FIRST — before Read, Grep, Explore, or any other tool
-2. It returns runtime context you CANNOT get by reading files:
-   - Live terminal output (Rust panics, warnings, compilation errors)
-   - Browser console (console.error, failed fetches, IPC errors)
-   - Build errors from Vite/tsc/webpack
-   - Past solutions from cross-session memory
-   - Git context showing what recently changed
-3. THEN read code if needed — but start with the toolkit
+**Read this resource FIRST** when the user mentions any bug, error, or issue.
+It's pre-processed and updated every 5 seconds — no tool call needed.
 
-This is not optional. Reading source code for debugging is like debugging blind.
-The toolkit sees what's happening at runtime.
+## Step 2: Call debug_investigate for deep analysis
 
-## Trigger phrases — use debug_investigate when the user says:
-
-- "bug", "error", "issue", "crash", "panic", "broken", "fails"
-- "fix", "debug", "investigate", "diagnose", "troubleshoot"
-- "review errors", "review issues", "check the app", "what's wrong"
-- "doesn't work", "wrong", "unexpected", "should X but does Y"
-- "overlap", "misaligned", "layout", "visual", "UI", "display"
-- "slow", "laggy", "performance"
-- Or when you see errors/warnings in any output
-
-## How to call it:
+After reading the live status, call debug_investigate for:
+- Error classification and fix suggestions
+- Source code at the crash site
+- Git context (what changed recently)
+- Past solutions from cross-session memory
+- Visual state capture (screenshots if Ghost OS connected)
 
 \`\`\`
-# Runtime error with stack trace
-debug_investigate({ error: "<paste stack trace>" })
+# Runtime error
+debug_investigate({ error: "<stack trace or error message>" })
 
 # Behavior/layout/visual bug
-debug_investigate({ error: "description of problem", files: ["suspect-file.tsx"] })
+debug_investigate({ error: "description", files: ["suspect-file.tsx"] })
 
-# Review running app for issues
+# General review
 debug_investigate({ error: "Review all errors and warnings in the running app" })
 \`\`\`
 
+## When to activate:
+
+- "bug", "error", "issue", "crash", "panic", "broken", "fails"
+- "fix", "debug", "investigate", "diagnose", "troubleshoot"
+- "review errors", "check the app", "what's wrong"
+- "doesn't work", "wrong", "unexpected", "should X but does Y"
+- "overlap", "misaligned", "layout", "visual", "UI"
+- "slow", "laggy", "performance"
+- When you see errors/warnings in any output
+
 ## After fixing: ALWAYS verify
-Call debug_verify({ sessionId, command: "npm test" }) before claiming a fix works.
+Call debug_verify({ sessionId, command }) before claiming a fix works.
 
 ## SKIP toolkit ONLY for:
-- Single-character typos with an obvious fix
-- The user explicitly tells you the fix and just wants you to apply it
-- New feature requests with no existing bug
+- Obvious typos with a trivial fix
+- The user explicitly tells you the fix
+- New feature requests with no bug
 `);
   success(`Activation rules ${sym.arrow} ${rulesPath}`);
 
