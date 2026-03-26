@@ -1,6 +1,6 @@
 # debug-toolkit
 
-Closed-loop debugging for AI coding agents. One MCP server gives your agent the ability to **see code running** — not just read and write it.
+Runtime context layer for AI coding agents. One MCP server gives your agent live access to terminal output, browser console, build errors, TypeScript errors, git diffs, screenshots, and cross-session memory — so it can debug in one tool call what would take 20+ file reads manually.
 
 ```bash
 npm i -g debug-toolkit            # install globally (one time)

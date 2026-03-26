@@ -425,7 +425,8 @@ export interface LiveContext {
  * Called periodically by the serve process.
  */
 export function writeLiveContext(cwd: string): void {
-  const recent = peekRecentOutput({ terminalLines: 50, browserLines: 30, buildErrors: 20 });
+  // Capture ALL output — agents need full context, not just errors
+  const recent = peekRecentOutput({ terminalLines: 200, browserLines: 100, buildErrors: 50 });
   const context: LiveContext = {
     updatedAt: new Date().toISOString(),
     terminal: recent.terminal.map((c) => {

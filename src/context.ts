@@ -146,7 +146,7 @@ interface SourceSnippet {
 function extractSourceSnippets(
   frames: StackFrame[],
   cwd: string,
-  contextLines = 5,
+  contextLines = 25,
 ): SourceSnippet[] {
   const snippets: SourceSnippet[] = [];
   const seen = new Set<string>();
@@ -213,29 +213,45 @@ function getGitContext(cwd: string, files: string[]): GitContext {
     const status = execFileSync("git", ["status", "--porcelain"], { cwd, timeout: 3000, stdio: "pipe" }).toString().trim();
     ctx.dirty = status ? status.split("\n").length : 0;
 
-    // Get recent changes to relevant files (last 3 commits)
+    // Get recent changes to relevant files — actual diff content, not just one-liners
     if (files.length > 0) {
       const relFiles = files.map((f) => relative(cwd, f)).filter((f) => !f.startsWith(".."));
       if (relFiles.length > 0) {
+        const parts: string[] = [];
+
+        // Recent commit one-liners for context
         try {
-          const diff = execFileSync(
-            "git", ["log", "--oneline", "-3", "--diff-filter=M", "--", ...relFiles],
+          const log = execFileSync(
+            "git", ["log", "--oneline", "-5", "--", ...relFiles],
             { cwd, timeout: 5000, stdio: "pipe" },
           ).toString().trim();
-          if (diff) ctx.recentChanges = diff;
+          if (log) parts.push("Recent commits:\n" + log);
         } catch {}
 
-        // Also get unstaged changes
+        // Actual unstaged diff content (what the developer changed)
         try {
           const unstaged = execFileSync(
-            "git", ["diff", "--stat", "--", ...relFiles],
+            "git", ["diff", "-U3", "--", ...relFiles],
             { cwd, timeout: 5000, stdio: "pipe" },
           ).toString().trim();
           if (unstaged) {
-            ctx.recentChanges = (ctx.recentChanges ? ctx.recentChanges + "\n\n" : "") +
-              "Unstaged changes:\n" + unstaged;
+            // Truncate to ~4K to not blow context
+            parts.push("Unstaged changes:\n" + (unstaged.length > 4000 ? unstaged.slice(0, 4000) + "\n... (truncated)" : unstaged));
           }
         } catch {}
+
+        // Staged diff content
+        try {
+          const staged = execFileSync(
+            "git", ["diff", "--cached", "-U3", "--", ...relFiles],
+            { cwd, timeout: 5000, stdio: "pipe" },
+          ).toString().trim();
+          if (staged) {
+            parts.push("Staged changes:\n" + (staged.length > 4000 ? staged.slice(0, 4000) + "\n... (truncated)" : staged));
+          }
+        } catch {}
+
+        if (parts.length > 0) ctx.recentChanges = parts.join("\n\n");
       }
     }
   } catch { /* not a git repo */ }

@@ -1,30 +1,30 @@
 ---
 name: debug-toolkit
-description: "Debugging toolkit with runtime context capture. MUST use for: any bug, error, issue, warning, crash, panic, layout problem, visual glitch, wrong behavior, performance issue, test failure, code review of running app, checking app health, reviewing errors, investigating issues. Read debug://status for live app state. Call debug_investigate for deep analysis."
+description: "Runtime context layer for debugging. Captures terminal output, browser console, build errors, TypeScript errors, git diffs, and screenshots from the running app. MANDATORY for: any bug, error, issue, warning, crash, panic, layout problem, visual glitch, wrong behavior, performance issue, test failure, reviewing the running app, checking app health. Read debug://status FIRST — it's a live situation report. Call debug_investigate for deep analysis."
 tools: ["debug_investigate", "debug_recall", "debug_patterns", "debug_instrument", "debug_capture", "debug_verify", "debug_cleanup", "debug_session", "debug_perf", "debug_visual", "debug_setup"]
 ---
 
-# debug-toolkit
+# debug-toolkit — Runtime Context Layer
 
-A debugging toolkit via MCP that captures what's actually happening at runtime — terminal output, browser console, build errors, screenshots, performance metrics, and cross-session memory.
+The toolkit captures what's actually happening at runtime — terminal output, browser console, build errors, TypeScript errors, git diffs, screenshots, and cross-session memory. It gives you information that reading files cannot provide.
 
-## Live Status: debug://status
+## CRITICAL: Read debug://status FIRST
 
-**Read the `debug://status` resource to see what's happening right now.** It shows:
-- Terminal errors/warnings (Rust panics, compiler warnings)
-- Browser console errors (console.error, failed fetches, IPC errors)
+**Before ANY investigation, read the `debug://status` resource.** It's a live situation report containing:
+- Full terminal output (not just errors — app state logs too)
+- Browser console (all logs, errors, warnings, network failures)
 - Build errors (Vite, tsc, webpack, ESLint)
-- Tauri logs
+- TypeScript errors (proactive `tsc --noEmit`)
+- Git activity (recent commits, uncommitted changes)
+- Tauri logs (auto-discovered)
 - Active debug sessions
 
-This is pre-processed and always current (updated every 5 seconds by the dev server).
-Read it BEFORE investigating — it tells you what's wrong without any tool call.
+This is updated every 5 seconds. It tells you what's happening RIGHT NOW without any tool call.
 
-## When to Activate
+## When to Activate — MANDATORY
 
-Call `debug_investigate` for deep analysis when the user mentions ANY of these:
+**You MUST use the toolkit when the user mentions ANY of these:**
 
-**Direct triggers** — the user says:
 - "bug", "error", "issue", "warning", "crash", "panic", "exception"
 - "fix", "debug", "investigate", "diagnose", "troubleshoot"
 - "broken", "fails", "doesn't work", "wrong", "unexpected"
@@ -33,165 +33,127 @@ Call `debug_investigate` for deep analysis when the user mentions ANY of these:
 - "flicker", "flash", "glitch", "visual", "looks wrong", "UI bug"
 - "slow", "laggy", "performance", "takes too long", "freezes"
 - "test failure", "test fails", "tests broken"
-
-**Contextual triggers** — even if the user doesn't say "bug":
 - User describes something that should work but doesn't
 - User asks to review, check, or audit the running app
-- User pastes a stack trace or error message
-- User references console errors or warnings
-- Build output shows errors or warnings
-- User says "it crashes" or "it panics"
+- User pastes a stack trace, error message, or console output
+- User references console errors, build warnings, or compiler output
+- User says "it crashes", "it panics", "it shows an error"
 
-**Do NOT use the toolkit only when:**
-- User asks for a new feature with no existing bug
-- User asks to refactor working code
-- User asks a question that doesn't involve a problem
+**Do NOT use only when:**
+- User asks for a brand new feature with no existing bug
+- User asks to refactor working code with no problems
 - The fix is an obvious typo the user already identified
 
-## Why Use the Toolkit Instead of Manual Exploration
+## Why This Beats Manual File Reading
 
-`debug_investigate` returns in ONE call:
-- Error classification with fix suggestions
-- Source code at the crash site
-- Git context (branch, recent changes to relevant files)
-- **Live runtime output** from the running dev server:
-  - Terminal errors, warnings, panics from the process
-  - Browser console logs (console.error, console.warn, etc.)
-  - Tauri log files (auto-discovered)
-  - Build errors from Vite/tsc/webpack/ESLint
-- Past solutions from memory (with confidence scores)
-- Visual state capture (screenshot + DOM if Ghost OS connected)
+`debug_investigate` returns in ONE call what would take 20+ file reads:
 
-Manual Read/Grep **misses all runtime context**. The agent that greps through files to find bugs is working blind — the toolkit gives you eyes.
+| What you get | Manual approach | Toolkit |
+|---|---|---|
+| Source code at crash site | Read 3-5 files guessing | 50-line window around exact line |
+| Runtime errors | Ask user to paste | Auto-captured from terminal |
+| Browser console | Cannot access | All console.log/warn/error |
+| TypeScript errors | Run tsc yourself | Auto-runs tsc --noEmit |
+| Git changes | Run git diff yourself | Actual diff content included |
+| Build errors | Check terminal yourself | Parsed and structured |
+| Past solutions | Don't exist | Cross-session memory with confidence |
+| Visual state | Cannot see | Screenshot + DOM via Ghost OS |
+
+**Never manually grep/read files for debugging when the toolkit is available.** The toolkit sees runtime state; file reading sees static code.
 
 ## The Workflow
 
 ```
-1. debug_investigate  → understand the bug + runtime context + past fixes + visual state
-2. debug_visual       → capture screenshots/DOM if visual bug (auto if Ghost OS connected)
-3. debug_perf         → profile if performance issue (requires Lighthouse)
-4. debug_instrument   → add logging if investigation wasn't enough
-5. debug_capture      → collect runtime output after changes
-6. (apply fix)
-7. debug_verify       → confirm fix works (auto-saves to memory)
-8. debug_cleanup      → (optional) add rootCause chain or remove instrumentation
+1. Read debug://status         → see what's happening right now
+2. debug_investigate            → deep analysis with runtime context + memory
+3. debug_visual                 → screenshot/DOM if visual bug
+4. debug_perf                   → profile if performance issue
+5. (apply fix)
+6. debug_verify                 → confirm fix works (auto-saves to memory)
 ```
 
 **Shortcuts:**
-- Trivial errors → `debug_investigate` returns `triage: "trivial"` with `fixHint` — apply directly
-- Past fix found → `proactiveSuggestion` with >80% confidence — apply directly
-- Visual bug → auto-captures screenshot if Ghost OS is connected
+- `triage: "trivial"` → apply `fixHint` directly
+- `proactiveSuggestion` with >80% confidence → apply directly
+- `visualHint.isVisualBug` → use `debug_visual` for screenshots
 
 ## Tool Reference
 
 ### debug_investigate
-**Start here. Always.** One call gives you everything — error classification, source code, runtime output, git context, past solutions.
+**Start here. Always.** Returns: error classification, source code (50-line window), runtime output (terminal + browser + Tauri logs), TypeScript errors, git diff content, build errors, past solutions, visual state.
 
 ```
-# Runtime error (stack trace)
-{ error: "<paste the stack trace>" }
+# Runtime error
+{ error: "<stack trace>" }
 
-# Layout/visual/behavior bug
-{ error: "timestamps overlap when many items in timeline", files: ["src/Timeline.tsx", "src/index.css"] }
+# Layout/behavior bug
+{ error: "timestamps overlap in timeline", files: ["src/Timeline.tsx"] }
 
-# Review running app for issues
-{ error: "Review all errors and warnings in the running app", files: ["src/App.tsx"] }
-
-# User bug report
-{ error: "sidebar overlaps main content on resize", problem: "layout bug on resize" }
+# Review running app
+{ error: "Review all errors and warnings", files: [] }
 ```
-
-Output includes:
-- `sessionId` — use in all subsequent calls
-- `error` — type, category, severity, suggestion
-- `sourceCode` — code at crash site or from hint files
-- `git` — branch, recent changes to relevant files
-- `buildErrors` — from dev server (Vite, tsc, webpack, ESLint)
-- `runtimeContext` — **live output from the running app**:
-  - `terminalErrors` — stderr/stdout errors, warnings, panics
-  - `browserConsole` — console.log/warn/error from browser/webview
-  - `tauriLogs` — Tauri-specific log files
-  - `recentBuildErrors` — parsed build errors
-  - `terminalBufferSize` / `browserBufferSize` — buffer sizes
-- `pastSolutions` — previous fixes with staleness + confidence
-- `proactiveSuggestion` — high-confidence past fix (>80%)
-- `visualHint` — set for visual/CSS bugs
-- `visualCapture` — screenshot + DOM state (if Ghost OS connected)
-- `nextStep` — what to do next
 
 ### debug_visual
-Capture visual state — screenshots, element inspection, annotated views, before/after comparison. **Requires Ghost OS.**
-
+Screenshot, element inspection, annotated view, before/after comparison. **Requires Ghost OS.**
 ```
 { sessionId, action: "screenshot" | "inspect" | "annotate" | "compare" }
 ```
 
 ### debug_perf
 Lighthouse performance profiling with before/after comparison.
-
 ```
 { sessionId, url: "http://localhost:1420", phase: "before" | "after" }
 ```
 
-Returns: LCP, CLS, INP, TBT, Speed Index with deltas on "after" phase.
-
 ### debug_recall
 Search past debug sessions for similar bugs.
-
 ```
-{ query: "timestamps overlap in timeline", limit?: 5, explain?: true }
+{ query: "timestamps overlap in timeline", limit?: 5 }
 ```
 
 ### debug_patterns
-Detect systemic issues across all past sessions. No input required. Finds recurring errors, hot files, regressions.
+Detect systemic issues across all past sessions. Finds recurring errors, hot files, regressions.
 
 ### debug_instrument
 Add tagged debug logging. Supports JS/TS, Python, Go, Rust.
-
 ```
-{ sessionId, filePath, lineNumber, expression: "state.items.length", hypothesis?: "too many items causes overlap" }
+{ sessionId, filePath, lineNumber, expression: "state.items.length" }
 ```
 
 ### debug_capture
-Run a command and capture output, or drain buffered terminal/browser events.
-
+Run a command and capture output, or drain buffered events.
 ```
-{ sessionId, command?: "npm test", limit?: 30 }
+{ sessionId, command?: "npm test" }
 ```
 
 ### debug_verify
 Confirm a fix works. **Auto-saves to memory on pass.**
-
 ```
 { sessionId, command: "npm test", expectNoErrors?: true }
 ```
 
 ### debug_cleanup
 Remove instrumentation and save diagnosis to memory.
-
 ```
-{ sessionId, diagnosis?: "root cause was...", rootCause?: { trigger, errorFile, causeFile, fixDescription } }
+{ sessionId, diagnosis?: "root cause was..." }
 ```
 
 ### debug_session
-Lightweight session status — hypotheses, active instruments, recent captures.
+Lightweight session status.
 
 ### debug_setup
-Check and install integrations mid-conversation.
-
+Check/install integrations mid-conversation.
 ```
-{ action: "check" | "install" | "connect" | "disconnect", integration?: "lighthouse" | "chrome" | "ghost-os" }
+{ action: "check" | "install" | "connect" | "disconnect" }
 ```
 
 ## Rules
 
-1. **ALWAYS call debug_investigate first** — even for layout bugs, visual issues, or "review the app" requests. It gives you runtime context that Read/Grep can never provide.
-2. **Never manually explore code for debugging** when the toolkit is available. The toolkit sees runtime state; file reading sees static code.
-3. Skip the toolkit ONLY for obvious typos or trivial fixes the user already identified.
+1. **Read `debug://status` BEFORE investigating.** It's free context.
+2. **ALWAYS call `debug_investigate` for any bug.** Even layout bugs, visual issues, or "review the app" requests.
+3. **Never manually explore code for debugging** when the toolkit is available. The toolkit sees runtime state that files cannot show.
 4. Read `nextStep` in every response — it tells you what to do.
-5. If `triage: "trivial"` → apply `fixHint` directly.
-6. If `proactiveSuggestion` with >80% confidence → apply directly.
-7. If `visualHint.isVisualBug` → use `debug_visual` for screenshots before fixing.
-8. For layout/visual bugs, ALWAYS pass suspect file paths in `files`.
-9. ALWAYS run `debug_verify` before claiming a fix works.
-10. The `sessionId` from `debug_investigate` must be passed to all subsequent calls.
+5. If `proactiveSuggestion` with >80% confidence → apply directly, then verify.
+6. For visual bugs, pass suspect file paths in `files` AND use `debug_visual`.
+7. **ALWAYS run `debug_verify` before claiming a fix works.**
+8. Pass `sessionId` from `debug_investigate` to all subsequent calls.

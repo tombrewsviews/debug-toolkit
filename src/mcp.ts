@@ -12,6 +12,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { execSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import {
@@ -76,26 +77,72 @@ function text(data: unknown) {
  * Reads from .debug/live-context.json (written by serve process every 5s)
  * since MCP and serve run in separate processes with separate ring buffers.
  */
+function formatBrowserEvent(b: { timestamp: string; source: string; data: unknown }): string {
+  const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
+  if (d?.args) return `[${d.level ?? b.source}] ${(d.args as string[]).join(" ")}`;
+  if (d?.url) return `[network] ${d.method ?? "GET"} ${d.url} → ${d.status ?? d.error}`;
+  if (d?.message) return `[${d.type ?? "error"}] ${d.message}`;
+  return JSON.stringify(d ?? b.data);
+}
+
+function runQuickTsc(cwd: string): string[] {
+  try {
+    const result = execSync("npx tsc --noEmit 2>&1", { cwd, timeout: 15_000, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+    return []; // clean
+  } catch (e: any) {
+    if (e.stdout) {
+      return e.stdout.split("\n").filter((l: string) => l.trim() && /error TS\d+/.test(l)).slice(0, 20);
+    }
+    return [];
+  }
+}
+
+function getRecentGitActivity(cwd: string): string[] {
+  try {
+    // Get actual diff stat + changed files for last 3 commits
+    const log = execSync("git log --oneline -5 2>/dev/null", { cwd, encoding: "utf-8", timeout: 5_000 }).trim();
+    const dirty = execSync("git diff --stat 2>/dev/null", { cwd, encoding: "utf-8", timeout: 5_000 }).trim();
+    const lines: string[] = [];
+    if (log) lines.push("Recent commits:", ...log.split("\n").map(l => `  ${l}`));
+    if (dirty) lines.push("Uncommitted changes:", ...dirty.split("\n").map(l => `  ${l}`));
+    return lines;
+  } catch { return []; }
+}
+
 function buildLiveStatus(cwd: string): string {
   const sections: string[] = [];
-  sections.push("# debug-toolkit — Live Runtime Status\n");
+  sections.push("# debug-toolkit — Live Situation Report\n");
 
   // Read from live context file (written by serve process)
   const live = readLiveContext(cwd);
 
   // Also try local ring buffers (if MCP is co-located with serve, e.g. tests)
-  const local = peekRecentOutput({ terminalLines: 50, browserLines: 30, buildErrors: 20 });
+  const local = peekRecentOutput({ terminalLines: 200, browserLines: 100, buildErrors: 50 });
 
   // Use whichever source has data
   const hasLive = live !== null;
   const hasLocal = local.counts.terminal > 0 || local.counts.browser > 0;
 
   if (!hasLive && !hasLocal) {
-    sections.push("⚠️ **Dev server not running or not capturing.**\n");
-    sections.push("Start the dev server with capture: `npx debug-toolkit serve -- <your dev command>`\n");
-    sections.push("This enables live terminal, browser console, and build error capture.\n");
+    sections.push("**Dev server not running or not capturing.**\n");
+    sections.push("Start with: `npx debug-toolkit serve -- <your dev command>`\n");
 
-    // Still show Tauri logs and sessions
+    // Still provide what we can — static analysis and git
+    const tscErrors = runQuickTsc(cwd);
+    if (tscErrors.length > 0) {
+      sections.push("## TypeScript Errors\n");
+      sections.push("```");
+      for (const e of tscErrors) sections.push(e);
+      sections.push("```\n");
+    }
+
+    const gitLines = getRecentGitActivity(cwd);
+    if (gitLines.length > 0) {
+      sections.push("## Git Activity\n");
+      for (const l of gitLines) sections.push(l);
+      sections.push("");
+    }
+
     appendTauriLogs(sections, cwd);
     appendSessions(sections, cwd);
     return sections.join("\n");
@@ -104,16 +151,30 @@ function buildLiveStatus(cwd: string): string {
   if (hasLive && live) {
     sections.push(`*Updated: ${live.updatedAt}*\n`);
 
-    // Terminal errors/warnings
-    const termErrors = live.terminal.filter((t) => /error|warn|panic|failed|crash|exception/i.test(t.text));
-    if (termErrors.length > 0) {
-      sections.push("## Terminal Errors & Warnings\n");
-      sections.push("```");
-      for (const t of termErrors.slice(-20)) sections.push(t.text);
-      sections.push("```\n");
+    // === FULL TERMINAL OUTPUT (unfiltered — agent needs to see app state) ===
+    if (live.terminal.length > 0) {
+      // Split into errors and application output
+      const errors = live.terminal.filter((t) => /error|warn|panic|failed|crash|exception/i.test(t.text));
+      const appOutput = live.terminal.filter((t) => !/error|warn|panic|failed|crash|exception/i.test(t.text));
+
+      if (errors.length > 0) {
+        sections.push("## Terminal Errors & Warnings\n");
+        sections.push("```");
+        for (const t of errors.slice(-30)) sections.push(t.text);
+        sections.push("```\n");
+      }
+
+      // Application output — shows what's running, what loaded, what state the app is in
+      if (appOutput.length > 0) {
+        sections.push("## Terminal Output (app state)\n");
+        sections.push("```");
+        // Show last 50 lines of non-error output
+        for (const t of appOutput.slice(-50)) sections.push(t.text);
+        sections.push("```\n");
+      }
     }
 
-    // Build errors
+    // === BUILD ERRORS ===
     if (live.buildErrors.length > 0) {
       sections.push("## Build Errors\n");
       for (const e of live.buildErrors) {
@@ -122,38 +183,65 @@ function buildLiveStatus(cwd: string): string {
       sections.push("");
     }
 
-    // Browser console errors
+    // === FULL BROWSER CONSOLE (unfiltered — agent needs ALL logs) ===
+    if (live.browser.length > 0) {
+      const errors = live.browser.filter((b) => {
+        const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
+        return d?.level === "error" || d?.level === "warn" || b.source === "browser-error" || b.source === "browser-network";
+      });
+      const logs = live.browser.filter((b) => {
+        const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
+        return d?.level !== "error" && d?.level !== "warn" && b.source !== "browser-error" && b.source !== "browser-network";
+      });
+
+      if (errors.length > 0) {
+        sections.push("## Browser Errors & Warnings\n");
+        sections.push("```");
+        for (const b of errors.slice(-30)) sections.push(formatBrowserEvent(b));
+        sections.push("```\n");
+      }
+
+      if (logs.length > 0) {
+        sections.push("## Browser Console (app logs)\n");
+        sections.push("```");
+        for (const b of logs.slice(-30)) sections.push(formatBrowserEvent(b));
+        sections.push("```\n");
+      }
+    }
+
+    // === PROACTIVE STATIC ANALYSIS ===
+    const tscErrors = runQuickTsc(cwd);
+    if (tscErrors.length > 0) {
+      sections.push("## TypeScript Errors (tsc --noEmit)\n");
+      sections.push("```");
+      for (const e of tscErrors) sections.push(e);
+      sections.push("```\n");
+    }
+
+    // === GIT ACTIVITY ===
+    const gitLines = getRecentGitActivity(cwd);
+    if (gitLines.length > 0) {
+      sections.push("## Git Activity\n");
+      for (const l of gitLines) sections.push(l);
+      sections.push("");
+    }
+
+    // === SUMMARY ===
+    sections.push("## Summary\n");
+    const termErrors = live.terminal.filter((t) => /error|warn|panic|failed|crash|exception/i.test(t.text));
     const browserErrors = live.browser.filter((b) => {
       const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
       return d?.level === "error" || d?.level === "warn" || b.source === "browser-error" || b.source === "browser-network";
     });
-    if (browserErrors.length > 0) {
-      sections.push("## Browser Console\n");
-      sections.push("```");
-      for (const b of browserErrors.slice(-15)) {
-        const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
-        if (d?.args) {
-          sections.push(`[${d.level ?? b.source}] ${(d.args as string[]).join(" ")}`);
-        } else if (d?.url) {
-          sections.push(`[network] ${d.method ?? "GET"} ${d.url} → ${d.status ?? d.error}`);
-        } else if (d?.message) {
-          sections.push(`[${d.type ?? "error"}] ${d.message}`);
-        } else {
-          sections.push(JSON.stringify(d ?? b.data));
-        }
-      }
-      sections.push("```\n");
-    }
-
-    // Capture status
-    sections.push("## Capture Status\n");
-    sections.push(`- Terminal: ${live.counts.terminal} lines | Browser: ${live.counts.browser} events | Build errors: ${live.counts.buildErrors}`);
+    const totalIssues = termErrors.length + live.buildErrors.length + browserErrors.length + tscErrors.length;
+    sections.push(`- Terminal: ${live.counts.terminal} lines (${termErrors.length} errors/warnings)`);
+    sections.push(`- Browser: ${live.counts.browser} events (${browserErrors.length} errors/warnings)`);
+    sections.push(`- Build errors: ${live.buildErrors.length}`);
+    sections.push(`- TypeScript errors: ${tscErrors.length}`);
     sections.push("");
 
-    // Count issues
-    const totalIssues = termErrors.length + live.buildErrors.length + browserErrors.length;
     if (totalIssues > 0) {
-      sections.push(`**${totalIssues} issue(s) detected.** Call \`debug_investigate\` to analyze.\n`);
+      sections.push(`**${totalIssues} issue(s) detected.** Call \`debug_investigate\` with the specific error for deep analysis.\n`);
     } else {
       sections.push("**No errors detected.** App running cleanly.\n");
     }
@@ -367,6 +455,12 @@ Start every debugging session with this tool.`,
       })),
     };
 
+    // Proactive static analysis — catch what reading code would catch
+    const tscErrors = runQuickTsc(cwd);
+    if (tscErrors.length > 0) {
+      response.typeErrors = tscErrors;
+    }
+
     // Auto-include runtime output so agent sees live dev server state
     const hasTerminal = recentOutput.terminal.length > 0;
     const hasBrowser = recentOutput.browser.length > 0;
@@ -376,7 +470,14 @@ Start every debugging session with this tool.`,
       const runtimeContext: Record<string, unknown> = {};
 
       if (hasTerminal) {
-        // Filter to errors/warnings — skip noise
+        // Include ALL recent output — agent needs full context, not just errors
+        const allTerminal = recentOutput.terminal.slice(-50).map((c) => {
+          const d = typeof c.data === "object" && c.data !== null ? c.data as Record<string, unknown> : null;
+          return { timestamp: c.timestamp, text: d?.text ?? d?.data ?? String(c.data) };
+        });
+        runtimeContext.terminalOutput = allTerminal;
+
+        // Also flag errors specifically for quick scanning
         const termErrors = recentOutput.terminal.filter((c) => {
           const d = typeof c.data === "object" && c.data !== null ? c.data as Record<string, unknown> : null;
           const text = d?.text ?? d?.data ?? String(c.data);
@@ -393,7 +494,8 @@ Start every debugging session with this tool.`,
       }
 
       if (hasBrowser) {
-        runtimeContext.browserConsole = recentOutput.browser.slice(-15).map((c) => {
+        // Include ALL browser logs — agent needs full picture
+        runtimeContext.browserConsole = recentOutput.browser.slice(-50).map((c) => {
           const d = typeof c.data === "object" && c.data !== null ? c.data as Record<string, unknown> : null;
           return { timestamp: c.timestamp, source: c.source, ...(d ?? { text: String(c.data) }) };
         });
