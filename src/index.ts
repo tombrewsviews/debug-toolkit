@@ -407,6 +407,133 @@ function doctorCommand(cwd: string): void {
   info("Run 'npx debug-toolkit doctor' anytime to check your setup.");
 }
 
+// --- Interactive Prompts (zero dependencies) ---
+
+function ask(question: string): Promise<string> {
+  const { createInterface } = require("node:readline") as typeof import("node:readline");
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    rl.question(question, (answer: string) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function askChoice(question: string, options: Array<{ key: string; label: string }>): Promise<string> {
+  info(question);
+  for (const opt of options) {
+    info(`  ${c.cyan}${opt.key}${c.reset}) ${opt.label}`);
+  }
+  const answer = await ask(`\n  ${c.dim}Enter choice [${options[0].key}]: ${c.reset}`);
+  const match = options.find((o) => o.key === answer.toLowerCase());
+  return match?.key ?? options[0].key;
+}
+
+// --- Guided Setup (TTY entrypoint) ---
+
+async function guidedSetup(cwd: string): Promise<void> {
+  banner();
+
+  // Check if already initialized
+  const mcpExists = existsSync(join(cwd, ".mcp.json")) || existsSync(join(cwd, ".claude", "mcp.json"));
+
+  if (mcpExists) {
+    info("debug-toolkit is already set up in this project.\n");
+    const choice = await askChoice("What would you like to do?", [
+      { key: "1", label: "Check setup health (doctor)" },
+      { key: "2", label: "Re-run setup" },
+      { key: "3", label: "Start dev server with capture" },
+      { key: "4", label: "Export debug knowledge" },
+      { key: "5", label: "Import debug knowledge" },
+    ]);
+    switch (choice) {
+      case "1": doctorCommand(cwd); break;
+      case "2": initCommand(cwd); break;
+      case "3": await guidedServe(cwd); break;
+      case "4": await guidedExport(cwd); break;
+      case "5": await guidedImport(cwd); break;
+    }
+    return;
+  }
+
+  // Fresh project — guided init
+  info("Welcome! Let's set up debug-toolkit for this project.\n");
+
+  const pkgPath = join(cwd, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      if (pkg.name) success(`Detected project: ${c.bold}${pkg.name}${c.reset}`);
+    } catch { /* skip */ }
+  }
+
+  const proceed = await ask(`  ${c.dim}Set up debug-toolkit? (Y/n): ${c.reset}`);
+  if (proceed.toLowerCase() === "n") {
+    info("Setup cancelled. Run 'npx debug-toolkit' anytime to try again.");
+    return;
+  }
+
+  // Run the full init
+  initCommand(cwd);
+
+  // Offer optional installs
+  const caps = detectEnvironment(cwd);
+  if (!caps.perf.lighthouseAvailable) {
+    info("");
+    const installLh = await ask(`  ${c.dim}Install Lighthouse for performance profiling? (y/N): ${c.reset}`);
+    if (installLh.toLowerCase() === "y") {
+      info("Installing lighthouse globally...");
+      try {
+        execSync("npm install -g lighthouse", { stdio: "inherit", timeout: 120_000 });
+        success("Lighthouse installed");
+      } catch {
+        warn("Installation failed — install manually: npm install -g lighthouse");
+      }
+    }
+  }
+}
+
+async function guidedServe(cwd: string): Promise<void> {
+  let defaultCmd = "npm run dev";
+  const pkgPath = join(cwd, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      if (pkg.scripts?.dev) defaultCmd = "npm run dev";
+      else if (pkg.scripts?.start) defaultCmd = "npm start";
+      else if (pkg.scripts?.serve) defaultCmd = "npm run serve";
+    } catch { /* skip */ }
+  }
+
+  const cmd = await ask(`  ${c.dim}Dev command [${defaultCmd}]: ${c.reset}`);
+  const finalCmd = cmd || defaultCmd;
+  info(`Starting: npx debug-toolkit serve -- ${finalCmd}\n`);
+
+  const child = spawn(process.execPath, [process.argv[1], "serve", "--", ...finalCmd.split(" ")], {
+    stdio: "inherit",
+    cwd,
+  });
+  child.on("exit", (code) => process.exit(code ?? 0));
+  // Keep the process alive
+  await new Promise(() => {});
+}
+
+async function guidedExport(cwd: string): Promise<void> {
+  const outPath = await ask(`  ${c.dim}Export path [./debug-knowledge.json]: ${c.reset}`);
+  const finalPath = outPath || join(cwd, "debug-knowledge.json");
+  const result = exportPack(cwd, finalPath);
+  success(`Exported ${result.entries} entries to ${result.path}`);
+}
+
+async function guidedImport(cwd: string): Promise<void> {
+  const packPath = await ask(`  ${c.dim}Pack file path: ${c.reset}`);
+  if (!packPath) { warn("No path provided."); return; }
+  if (!existsSync(packPath)) { error(`File not found: ${packPath}`); return; }
+  const result = importPack(cwd, packPath);
+  success(`Imported ${result.imported} entries (${result.total} total in memory)`);
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -461,10 +588,15 @@ async function main(): Promise<void> {
       break;
     }
 
-    // DEFAULT: Pure MCP server. No dev server wrapping needed.
-    // Just start the MCP server on stdio. The agent gets 6 tools instantly.
+    // DEFAULT: Context-aware entrypoint.
+    // TTY (human in terminal) → guided setup/menu
+    // Non-TTY (MCP client)   → start MCP server silently
     case "mcp": {
-      await startMcpServer();
+      if (process.stdout.isTTY) {
+        await guidedSetup(cwd);
+      } else {
+        await startMcpServer();
+      }
       break;
     }
 

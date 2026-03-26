@@ -69,11 +69,12 @@ export function printHelp() {
   ${c.bold}${c.cyan}debug-toolkit${c.reset} ${c.dim}v0.5.0${c.reset}
   ${c.dim}Closed-loop debugging for AI agents${c.reset}
 
-  ${c.bold}SETUP${c.reset} ${c.dim}(one time)${c.reset}
-    ${c.green}npx debug-toolkit init${c.reset}
+  ${c.bold}QUICK START${c.reset}
+    ${c.green}npx debug-toolkit${c.reset}          ${c.dim}guided setup (in terminal) or MCP server (in Claude Code)${c.reset}
 
   ${c.bold}COMMANDS${c.reset}
-    init              set up debug-toolkit in your project
+    ${c.dim}(no args)${c.reset}         guided setup (interactive) or MCP server (non-interactive)
+    init              non-interactive setup
     doctor            check environment and optional integrations
     export            export debug memory to a knowledge pack
     import            import a knowledge pack
