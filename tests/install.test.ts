@@ -13,7 +13,7 @@ describe("integration installer", () => {
     const caps = detectEnvironment(process.cwd());
     const integrations = listInstallable(caps);
     expect(integrations.find((i) => i.id === "lighthouse")?.autoInstallable).toBe(true);
-    expect(integrations.find((i) => i.id === "ghost-os")?.autoInstallable).toBe(false);
+    expect(integrations.find((i) => i.id === "ghost-os")?.autoInstallable).toBe(process.platform === "darwin");
     expect(integrations.find((i) => i.id === "claude-preview")?.autoInstallable).toBe(false);
   });
 

@@ -2,7 +2,7 @@
  * utils.ts — Shared utilities for memory and pack modules.
  */
 
-import { existsSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, renameSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 export function memoryPath(cwd: string): string {
@@ -31,4 +31,17 @@ export function tokenize(text: string): string[] {
     .replace(/[^a-z0-9_./\-]/g, " ")
     .split(/\s+/)
     .filter((w) => w.length > 2);
+}
+
+export function screenshotDir(cwd: string): string {
+  return join(cwd, ".debug", "screenshots");
+}
+
+export function saveScreenshot(cwd: string, sessionId: string, phase: string, base64Data: string): string {
+  const dir = screenshotDir(cwd);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const filename = `${sessionId}_${phase}_${Date.now()}.png`;
+  const filepath = join(dir, filename);
+  writeFileSync(filepath, Buffer.from(base64Data, "base64"), { mode: 0o600 });
+  return filepath;
 }

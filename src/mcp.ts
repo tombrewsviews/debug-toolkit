@@ -12,7 +12,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import {
   createSession, loadSession, saveSession, newHypothesisId,
   indexMarker, type Hypothesis,
@@ -32,10 +33,38 @@ import { fitToBudget, estimateTokens } from "./budget.js";
 import { explainTriage, explainConfidence } from "./explain.js";
 import { recordOutcome, getTelemetry, getFixRateForError } from "./telemetry.js";
 import { detectEnvironment, listInstallable, installIntegration, type EnvironmentCapabilities } from "./adapters.js";
+import {
+  connectToGhostOs, disconnectGhostOs, isGhostConnected, resetConnectionState,
+  takeScreenshot, readScreen, findElements, annotateScreen,
+} from "./ghost-bridge.js";
+import { screenshotDir, saveScreenshot } from "./utils.js";
 
 let cwd = process.cwd();
 let envCaps: EnvironmentCapabilities | null = null;
 export function setCwd(dir: string): void { cwd = dir; }
+
+interface VisualConfig {
+  autoCapture: "auto" | "manual" | "off";
+  captureOnInvestigate: boolean;
+  captureOnVerify: boolean;
+  saveScreenshots: boolean;
+}
+
+let visualConfig: VisualConfig = {
+  autoCapture: "auto",
+  captureOnInvestigate: true,
+  captureOnVerify: true,
+  saveScreenshots: true,
+};
+
+function loadVisualConfig(cwd: string): void {
+  const configPath = join(cwd, ".debug", "config.json");
+  if (!existsSync(configPath)) return;
+  try {
+    const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+    if (raw.visual) Object.assign(visualConfig, raw.visual);
+  } catch { /* use defaults */ }
+}
 
 function text(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -236,20 +265,58 @@ Start every debugging session with this tool.`,
         : buildMsg;
     }
 
-    // Visual error advisory — tell agent to use visual tools (capability-aware)
+    // Visual error advisory — auto-capture if Ghost OS connected, otherwise advise
     if (visualError) {
+      // Auto-capture if Ghost OS connected and config allows
+      if (visualConfig.autoCapture !== "off" && visualConfig.captureOnInvestigate && isGhostConnected()) {
+        try {
+          const screenshot = await takeScreenshot();
+          const domState = await readScreen(undefined, errorText);
+
+          if (screenshot && visualConfig.saveScreenshots) {
+            const ssPath = saveScreenshot(cwd, session.id, "investigate", screenshot.image);
+
+            session.visualContext = {
+              screenshots: [{
+                id: `ss_${Date.now()}`,
+                timestamp: new Date().toISOString(),
+                tool: "ghost_screenshot",
+                reference: ssPath,
+              }],
+              domSnapshot: domState ? {
+                timestamp: new Date().toISOString(),
+                tool: "ghost_read",
+                elements: domState.elements.map((e) => ({ role: e.role, name: e.name, visible: true })),
+              } : null,
+            };
+            saveSession(cwd, session);
+
+            response.visualCapture = {
+              screenshot: ssPath,
+              elementsFound: domState?.elements.length ?? 0,
+              message: "Visual state captured automatically via Ghost OS.",
+            };
+          }
+        } catch { /* visual capture failed — non-fatal */ }
+      }
+
+      // Always include visual hint (whether or not we captured)
       const tools: string[] = [];
       if (envCaps?.visual.ghostOsConfigured) tools.push("ghost_screenshot", "ghost_read");
       if (envCaps?.visual.claudePreviewConfigured) tools.push("preview_screenshot", "preview_snapshot");
 
       response.visualHint = {
         isVisualBug: true,
-        message: tools.length > 0
-          ? `Visual/CSS bug detected. Use ${tools[0]} to capture the current state.`
-          : "Visual/CSS bug detected. No visual tools configured — run 'npx debug-toolkit doctor' for setup.",
-        suggestedActions: tools.length > 0
-          ? [`Take a screenshot with ${tools[0]}`, tools[1] ? `Capture DOM with ${tools[1]}` : "Compare before/after screenshots"]
-          : ["Install Ghost OS or Claude Preview for visual debugging", "Run 'npx debug-toolkit doctor' for setup"],
+        message: isGhostConnected()
+          ? "Visual/CSS bug detected. Screenshot captured automatically."
+          : tools.length > 0
+            ? `Visual/CSS bug detected. Use ${tools[0]} to capture the current state.`
+            : "Visual/CSS bug detected. Run 'npx debug-toolkit install' for visual debugging.",
+        suggestedActions: isGhostConnected()
+          ? ["Screenshot already captured", "Use debug_visual for more captures"]
+          : tools.length > 0
+            ? [`Take a screenshot with ${tools[0]}`]
+            : ["Install Ghost OS for visual debugging"],
       };
       // Append to nextStep
       if (typeof response.nextStep === "string") {
@@ -472,7 +539,7 @@ Use this before cleanup to confirm the fix actually works.`,
       });
     }
 
-    return text({
+    const verifyResponse: Record<string, unknown> = {
       passed,
       exitCode,
       errorCount: errors.length,
@@ -481,7 +548,32 @@ Use this before cleanup to confirm the fix actually works.`,
       nextStep: passed
         ? "Fix verified and auto-saved to memory! Use debug_cleanup to remove instrumentation (optional — diagnosis already recorded)."
         : "Fix failed. Review the errors above and try a different approach.",
-    });
+    };
+
+    // Visual verification: capture after-fix screenshot if we have a before
+    if (session.visualContext?.screenshots.length && isGhostConnected() && visualConfig.captureOnVerify) {
+      try {
+        const afterShot = await takeScreenshot();
+        if (afterShot && visualConfig.saveScreenshots) {
+          const afterPath = saveScreenshot(cwd, session.id, "verify", afterShot.image);
+          session.visualContext.screenshots.push({
+            id: `ss_${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            tool: "ghost_screenshot",
+            reference: afterPath,
+          });
+          saveSession(cwd, session);
+
+          verifyResponse.visualVerification = {
+            before: session.visualContext.screenshots[0].reference,
+            after: afterPath,
+            message: "Before/after screenshots captured. Compare to confirm visual fix.",
+          };
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    return text(verifyResponse);
   });
 
   // ━━━ TOOL 5: debug_cleanup ━━━
@@ -766,12 +858,23 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
   // Check and install integrations
   server.tool(
     "debug_setup",
-    "Check available integrations and install missing ones. Call with action 'check' to see status, or 'install' with an integration id to install it.",
+    "Check available integrations and install missing ones. Actions: check = list status, install = install integration, connect = connect Ghost OS, disconnect = disconnect Ghost OS.",
     {
-      action: z.enum(["check", "install"]).describe("check = list status, install = install an integration"),
-      integration: z.string().optional().describe("Integration id to install: lighthouse, chrome"),
+      action: z.enum(["check", "install", "connect", "disconnect"]).describe("check = list status, install = install an integration, connect = connect Ghost OS, disconnect = disconnect Ghost OS"),
+      integration: z.string().optional().describe("Integration id to install: lighthouse, chrome, ghost-os"),
     },
     async ({ action, integration }) => {
+      if (action === "connect") {
+        resetConnectionState();
+        const connected = await connectToGhostOs();
+        return text({ connected, message: connected ? "Ghost OS connected successfully" : "Ghost OS not available — install with 'npx debug-toolkit install'" });
+      }
+
+      if (action === "disconnect") {
+        await disconnectGhostOs();
+        return text({ disconnected: true, message: "Ghost OS disconnected" });
+      }
+
       const caps = detectEnvironment(cwd);
 
       if (action === "check") {
@@ -786,6 +889,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
             installCommand: i.installCommand,
             manualSteps: i.manualSteps,
           })),
+          ghostOsConnected: isGhostConnected(),
           summary: {
             available: integrations.filter((i) => i.available).map((i) => i.name),
             missing: integrations.filter((i) => !i.available).map((i) => i.name),
@@ -796,7 +900,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
 
       if (action === "install") {
         if (!integration) {
-          return text({ error: "Specify which integration to install", available: ["lighthouse", "chrome"] });
+          return text({ error: "Specify which integration to install", available: ["lighthouse", "chrome", "ghost-os"] });
         }
         const result = installIntegration(integration, cwd);
         // Refresh capabilities after install
@@ -806,7 +910,73 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
         return text(result);
       }
 
-      return text({ error: "Unknown action. Use 'check' or 'install'." });
+      return text({ error: "Unknown action. Use 'check', 'install', 'connect', or 'disconnect'." });
+    },
+  );
+
+  // ━━━ TOOL: debug_visual ━━━
+  // Explicit visual capture tool
+  server.tool(
+    "debug_visual",
+    "Capture visual state — screenshot, element inspection, annotated view, or before/after comparison. Requires Ghost OS.",
+    {
+      sessionId: z.string(),
+      action: z.enum(["screenshot", "inspect", "annotate", "compare"]).describe("screenshot=capture screen, inspect=find elements, annotate=labeled screenshot, compare=before/after"),
+      query: z.string().optional().describe("Element to find or inspect"),
+      app: z.string().optional().describe("Target app (default: frontmost)"),
+    },
+    async ({ sessionId, action, query, app }) => {
+      if (!isGhostConnected()) {
+        return text({
+          error: "Ghost OS is not connected.",
+          setup: "npx debug-toolkit install",
+          hint: "Ghost OS provides visual debugging — screenshots, DOM capture, element inspection.",
+        });
+      }
+
+      let session;
+      try { session = loadSession(cwd, sessionId); } catch { session = null; }
+
+      switch (action) {
+        case "screenshot": {
+          const shot = await takeScreenshot(app);
+          if (!shot) return text({ error: "Screenshot failed." });
+          const path = saveScreenshot(cwd, sessionId, "manual", shot.image);
+          if (session) {
+            if (!session.visualContext) session.visualContext = { screenshots: [], domSnapshot: null };
+            session.visualContext.screenshots.push({
+              id: `ss_${Date.now()}`, timestamp: new Date().toISOString(),
+              tool: "ghost_screenshot", reference: path,
+            });
+            saveSession(cwd, session);
+          }
+          return text({ screenshot: path, message: "Screenshot saved." });
+        }
+        case "inspect": {
+          const elements = await findElements(query ?? "", undefined, app);
+          return text({ elements, count: elements.length });
+        }
+        case "annotate": {
+          const annotated = await annotateScreen(app);
+          if (!annotated) return text({ error: "Annotation failed." });
+          const path = saveScreenshot(cwd, sessionId, "annotated", annotated.image);
+          return text({ screenshot: path, labels: annotated.labels });
+        }
+        case "compare": {
+          if (!session?.visualContext?.screenshots.length) {
+            return text({ error: "No previous screenshot to compare against. Take a screenshot first." });
+          }
+          const afterShot = await takeScreenshot(app);
+          if (!afterShot) return text({ error: "Screenshot failed." });
+          const afterPath = saveScreenshot(cwd, sessionId, "compare", afterShot.image);
+          return text({
+            before: session.visualContext.screenshots[0].reference,
+            after: afterPath,
+            message: "Before/after screenshots captured.",
+          });
+        }
+      }
+      return text({ error: "Unknown action." });
     },
   );
 
@@ -844,6 +1014,17 @@ Lightweight — returns a summary, not the full capture history.`,
 
 export async function startMcpServer(): Promise<void> {
   envCaps = detectEnvironment(cwd);
+  loadVisualConfig(cwd);
+
+  // Attempt Ghost OS connection (lazy — won't block if unavailable)
+  if (envCaps?.visual.ghostOsConfigured) {
+    connectToGhostOs().catch(() => {}); // Fire and forget
+  }
+
+  // Clean shutdown
+  process.on("SIGINT", () => { disconnectGhostOs(); });
+  process.on("SIGTERM", () => { disconnectGhostOs(); });
+
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);

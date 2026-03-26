@@ -71,6 +71,7 @@ export function formatCapabilitiesSummary(caps: VisualCapabilities): string {
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { atomicWrite } from "./utils.js";
 
 export interface DoctorCheck {
   group: "core" | "perf" | "visual";
@@ -269,11 +270,13 @@ export function listInstallable(caps: EnvironmentCapabilities): InstallableInteg
     {
       id: "ghost-os",
       name: "Ghost OS",
-      description: "Visual debugging — screenshots, DOM capture, UI automation",
+      description: "Visual debugging — screenshots, DOM capture, UI automation (macOS only)",
       available: caps.visual.ghostOsConfigured,
-      autoInstallable: false,
-      installCommand: null,
-      manualSteps: "Install Ghost OS from https://github.com/ghostwright/ghost-os then run 'ghost setup'",
+      autoInstallable: process.platform === "darwin",
+      installCommand: process.platform === "darwin" ? "brew install ghostwright/ghost-os/ghost-os" : null,
+      manualSteps: process.platform === "darwin"
+        ? "After install, run 'ghost setup' to configure permissions"
+        : "Ghost OS is macOS only",
     },
     {
       id: "claude-preview",
@@ -300,9 +303,34 @@ export function installIntegration(id: string, cwd: string): { success: boolean;
 
   try {
     execSync(target.installCommand, { stdio: "pipe", timeout: 180_000 });
+
+    // Post-install hook for Ghost OS: write MCP config
+    if (id === "ghost-os") {
+      try {
+        configureGhostOs(cwd);
+      } catch { /* non-fatal */ }
+    }
+
     return { success: true, message: `${target.name} installed successfully` };
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
     return { success: false, message: `Failed to install ${target.name}: ${err}. Manual: ${target.installCommand}` };
+  }
+}
+
+function configureGhostOs(cwd: string): void {
+  const mcpPath = join(cwd, ".mcp.json");
+  let config: Record<string, unknown> = {};
+  if (existsSync(mcpPath)) {
+    try { config = JSON.parse(readFileSync(mcpPath, "utf-8")); } catch { config = {}; }
+  }
+  if (!config.mcpServers) config.mcpServers = {};
+  const servers = config.mcpServers as Record<string, unknown>;
+  if (!servers["ghost-os"]) {
+    servers["ghost-os"] = {
+      command: "ghost-os",
+      args: ["--mcp"],
+    };
+    atomicWrite(mcpPath, JSON.stringify(config, null, 2));
   }
 }
