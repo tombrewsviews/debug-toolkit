@@ -194,10 +194,13 @@ export function printHelp() {
   ${c.bold}${c.cyan}debug-toolkit${c.reset} ${c.dim}v${VERSION}${c.reset}
   ${c.dim}Your AI agent's debugging superpower — investigate, fix, and learn from every bug.${c.reset}
 
+  ${c.bold}INSTALL${c.reset}
+    ${c.green}npm i -g debug-toolkit${c.reset}     ${c.dim}install globally for the ${c.reset}dbg${c.dim} command${c.reset}
+
   ${c.bold}QUICK START${c.reset}
     ${c.green}dbg${c.reset}                        ${c.dim}guided setup (in terminal) or MCP server (in Claude Code)${c.reset}
 
-  ${c.bold}COMMANDS${c.reset}  ${c.dim}(use ${c.reset}dbg${c.dim} or ${c.reset}npx debug-toolkit${c.dim})${c.reset}
+  ${c.bold}COMMANDS${c.reset}
     ${c.dim}(no args)${c.reset}         guided setup (interactive) or MCP server (non-interactive)
     init              non-interactive setup (writes .mcp.json, hooks, rules)
     doctor            check environment + optional integrations

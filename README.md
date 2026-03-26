@@ -2,17 +2,15 @@
 
 Closed-loop debugging for AI coding agents. One MCP server gives your agent the ability to **see code running** — not just read and write it.
 
-```
+```bash
+npm i -g debug-toolkit            # install globally (one time)
 dbg                               # guided setup (first time) or menu (returning)
 ```
 
-> **Alias:** `dbg` is a shorthand for `npx debug-toolkit`. Both work interchangeably.
-
 ## Quick Start
 
-One command. No docs needed. No prior knowledge required.
-
 ```bash
+npm i -g debug-toolkit
 cd your-project
 dbg
 ```
