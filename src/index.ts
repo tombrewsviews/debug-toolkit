@@ -441,6 +441,25 @@ function buildMenuOptions(cwd: string): SelectOption[] {
   ];
 }
 
+// --- Auto-install missing integrations ---
+
+async function autoInstallMissing(cwd: string): Promise<void> {
+  const caps = detectEnvironment(cwd);
+  const missing = listInstallable(caps).filter((i) => !i.available);
+  const autoInstallable = missing.filter((i) => i.autoInstallable);
+
+  if (autoInstallable.length === 0) return;
+
+  info(`Enabling additional capabilities...\n`);
+  for (const intg of autoInstallable) {
+    dim(`  ${intg.installCommand}`);
+    const result = installIntegration(intg.id, cwd);
+    if (result.success) success(`${intg.capability.split("—")[0].trim()}`);
+    else warn(`${intg.name}: ${result.message}`);
+  }
+  info("");
+}
+
 // --- Guided Setup (TTY entrypoint) ---
 
 async function guidedSetup(cwd: string): Promise<void> {
@@ -451,6 +470,10 @@ async function guidedSetup(cwd: string): Promise<void> {
 
   if (mcpExists) {
     success(`Already set up in this project. Ready to use in Claude Code.\n`);
+
+    // Auto-install missing integrations on every run
+    await autoInstallMissing(cwd);
+
     await mainMenu(cwd);
     return;
   }
@@ -476,23 +499,10 @@ async function guidedSetup(cwd: string): Promise<void> {
   initCommand(cwd);
 
   // Auto-install all available integrations
-  const capsAfterInit = detectEnvironment(cwd);
-  const missing = listInstallable(capsAfterInit).filter((i) => !i.available);
-  const autoInstallable = missing.filter((i) => i.autoInstallable);
-
-  if (autoInstallable.length > 0) {
-    info("");
-    info(`Enabling additional capabilities...`);
-    for (const intg of autoInstallable) {
-      dim(`  ${intg.installCommand}`);
-      const result = installIntegration(intg.id, cwd);
-      if (result.success) success(`${intg.capability.split("—")[0].trim()}`);
-      else warn(`${intg.name}: ${result.message}`);
-    }
-  }
+  info("");
+  await autoInstallMissing(cwd);
 
   // Show capability summary
-  info("");
   section("YOUR AGENT CAN NOW");
   success("Investigate errors — classify, locate source, show git context");
   success("Instrument code — add conditional logging in JS/TS, Python, Go, Rust");
@@ -512,13 +522,6 @@ async function guidedSetup(cwd: string): Promise<void> {
 
   dim("");
   dim("  Claude Code Preview is supported automatically in Claude Code desktop.");
-
-  const manualOnly = missing.filter((i) => !i.autoInstallable);
-  if (manualOnly.length > 0) {
-    for (const intg of manualOnly) {
-      dim(`  ${intg.name}: ${intg.manualSteps}`);
-    }
-  }
 
   // After setup, show menu for next steps
   info("");

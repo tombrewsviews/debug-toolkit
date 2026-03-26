@@ -1,6 +1,6 @@
 {
   "name": "debug-toolkit",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": "Closed-loop debugging toolkit for AI coding agents",
   "type": "module",
   "bin": {
