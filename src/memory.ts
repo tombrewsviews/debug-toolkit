@@ -18,8 +18,13 @@ import { memoryPath, walPath, atomicWrite, tokenize } from "./utils.js";
 
 // ━━━ Inverted Index Cache ━━━
 
-let invertedIndex: Map<string, Set<string>> | null = null;
-let indexedStorePath: string | null = null;
+interface IndexCache {
+  index: Map<string, Set<string>>;
+  generation: number;
+}
+const indexCacheMap = new Map<string, IndexCache>();
+const MAX_CACHED_PROJECTS = 5;
+let storeGeneration = 0;
 
 function buildIndex(store: MemoryStore): Map<string, Set<string>> {
   const idx = new Map<string, Set<string>>();
@@ -33,16 +38,45 @@ function buildIndex(store: MemoryStore): Map<string, Set<string>> {
 }
 
 function getIndex(cwd: string, store: MemoryStore): Map<string, Set<string>> {
-  const p = memoryPath(cwd);
-  if (invertedIndex && indexedStorePath === p) return invertedIndex;
-  invertedIndex = buildIndex(store);
-  indexedStorePath = p;
-  return invertedIndex;
+  const cached = indexCacheMap.get(cwd);
+  if (cached && cached.generation === storeGeneration) return cached.index;
+  const index = buildIndex(store);
+  // LRU eviction
+  if (indexCacheMap.size >= MAX_CACHED_PROJECTS) {
+    const oldest = indexCacheMap.keys().next().value;
+    if (oldest) indexCacheMap.delete(oldest);
+  }
+  indexCacheMap.set(cwd, { index, generation: storeGeneration });
+  return index;
 }
 
-function invalidateIndex(): void {
-  invertedIndex = null;
-  indexedStorePath = null;
+function invalidateIndex(cwd?: string): void {
+  storeGeneration++;
+  if (cwd) {
+    indexCacheMap.delete(cwd);
+  } else {
+    indexCacheMap.clear();
+  }
+}
+
+function addToIndex(cwd: string, entry: MemoryEntry): void {
+  const cached = indexCacheMap.get(cwd);
+  if (!cached) return; // No cache to update; lazy rebuild on next getIndex
+  for (const kw of entry.keywords) {
+    if (!cached.index.has(kw)) cached.index.set(kw, new Set());
+    cached.index.get(kw)!.add(entry.id);
+  }
+  cached.generation = ++storeGeneration;
+  indexCacheMap.set(cwd, cached);
+}
+
+function removeFromIndex(cwd: string, entryId: string): void {
+  const cached = indexCacheMap.get(cwd);
+  if (!cached) return;
+  for (const [, idSet] of cached.index) {
+    idSet.delete(entryId);
+  }
+  cached.generation = ++storeGeneration;
 }
 
 // ━━━ Write-Ahead Log ━━━
@@ -126,7 +160,7 @@ function compactNow(cwd: string): void {
   atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
   try { unlinkSync(walPath(cwd)); } catch { /* ignore */ }
   storeCache = null;
-  invalidateIndex();
+  invalidateIndex(); // Full invalidation on compaction
 }
 
 // ━━━ Types ━━━
@@ -216,7 +250,20 @@ export interface StalenessInfo {
   filesChanged: string[];
 }
 
+// ━━━ Staleness TTL Cache ━━━
+
+interface CachedStaleness {
+  result: StalenessInfo;
+  expiresAt: number;
+}
+const stalenessCache = new Map<string, CachedStaleness>();
+const STALENESS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 function checkStaleness(cwd: string, entry: MemoryEntry): StalenessInfo {
+  const cacheKey = `${entry.id}:${entry.gitSha ?? "none"}`;
+  const cached = stalenessCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.result;
+
   if (!entry.gitSha || !isValidSha(entry.gitSha)) {
     return { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
   }
@@ -257,15 +304,25 @@ function checkStaleness(cwd: string, entry: MemoryEntry): StalenessInfo {
     }
   }
 
-  if (changed.length === 0) return { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
+  if (changed.length === 0) {
+    const result: StalenessInfo = { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
+    stalenessCache.set(cacheKey, { result, expiresAt: Date.now() + STALENESS_TTL_MS });
+    return result;
+  }
 
-  return {
+  const result: StalenessInfo = {
     stale: true,
     reason: `${changed.length} file(s) changed in ${totalCommits} commit(s) since this diagnosis`,
     commitsBehind: totalCommits,
     filesChanged: changed,
   };
+  stalenessCache.set(cacheKey, { result, expiresAt: Date.now() + STALENESS_TTL_MS });
+  return result;
 }
+
+// ━━━ Pattern Detection Cache ━━━
+
+let patternCache: { cwd: string; generation: number; patterns: PatternInsight[] } | null = null;
 
 // ━━━ Pattern Detection ━━━
 
@@ -281,6 +338,9 @@ export interface PatternInsight {
  * Cheap — just scans the JSON array, no external calls.
  */
 export function detectPatterns(cwd: string): PatternInsight[] {
+  if (patternCache && patternCache.cwd === cwd && patternCache.generation === storeGeneration) {
+    return patternCache.patterns;
+  }
   const store = loadStore(cwd);
   if (store.entries.length < 2) return [];
   const insights: PatternInsight[] = [];
@@ -373,6 +433,7 @@ export function detectPatterns(cwd: string): PatternInsight[] {
     }
   }
 
+  patternCache = { cwd, generation: storeGeneration, patterns: insights };
   return insights;
 }
 
@@ -425,7 +486,7 @@ export function loadStore(cwd: string): MemoryStore {
 export function saveStore(cwd: string, store: MemoryStore): void {
   atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
   storeCache = null;
-  invalidateIndex();
+  storeGeneration++; // Invalidate index generation but don't clear cache
 }
 
 // ━━━ Public API ━━━
@@ -469,6 +530,7 @@ export function remember(
   }
 
   saveStore(cwd, store);
+  addToIndex(cwd, full);
   return full;
 }
 
