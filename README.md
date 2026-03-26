@@ -3,9 +3,164 @@
 Closed-loop debugging for AI coding agents. One MCP server gives your agent the ability to **see code running** — not just read and write it.
 
 ```
-npx debug-toolkit demo     # see it work (no AI needed)
-npx debug-toolkit init     # install in your project
+npx debug-toolkit                 # guided setup (first time) or menu (returning)
 ```
+
+## Quick Start
+
+One command. No docs needed. No prior knowledge required.
+
+```bash
+cd your-project
+npx debug-toolkit
+```
+
+**First time?** The guided setup detects your project, installs MCP config, checks optional integrations, and offers to install missing tools — all interactively.
+
+**Already set up?** You get a menu: check health, re-run setup, start serve mode, install integrations, or export/import knowledge.
+
+**From Claude Code?** The MCP server starts silently — zero change to existing behavior. (Detection: `stdout.isTTY` distinguishes human terminal from MCP client.)
+
+### Direct Commands (for scripts and CI)
+
+```
+npx debug-toolkit init            # non-interactive setup
+npx debug-toolkit install         # install optional integrations (Lighthouse, Chrome)
+npx debug-toolkit doctor          # check environment + optional integrations
+npx debug-toolkit demo            # see it work (no AI needed)
+npx debug-toolkit export [path]   # export debug memory as a knowledge pack
+npx debug-toolkit import <path>   # import a knowledge pack into this project
+```
+
+## What Happens During Setup
+
+`npx debug-toolkit` (or `npx debug-toolkit init`) does the following:
+
+1. **Detects your project** — reads `package.json`, identifies Tauri/Vite/React projects
+2. **Preflight checks** — validates Node.js version, dependencies, git, Rust (if Tauri)
+3. **Writes `.mcp.json`** — registers the MCP server for Claude Code
+4. **Installs pre-commit hook** — blocks accidental commits containing debug markers
+5. **Creates activation rules** — `.claude/rules/debug-toolkit.md` tells Claude when to use the toolkit
+6. **Installs SKILL.md** — `.claude/skills/debug-toolkit/SKILL.md` with a dynamic capabilities table
+7. **Checks optional integrations** — reports what's available and what's missing with fix commands
+
+### Optional Integrations
+
+| Integration | What It Enables | How to Get It |
+|-------------|----------------|---------------|
+| **Lighthouse** | `debug_perf` — Web Vitals snapshots (LCP, CLS, INP) | `npm install -g lighthouse` |
+| **Chrome** | Headless browser for Lighthouse | Install from [google.com/chrome](https://google.com/chrome) |
+| **Ghost OS** | Auto-screenshots, DOM capture, element inspection for visual bugs | `brew install ghostwright/ghost-os/ghost-os` (macOS) |
+| **Claude Preview** | Browser preview screenshots and inspection | Built into Claude Code |
+
+All optional — the toolkit works without any of them. When a tool needs an integration that's missing, you get a clear setup message instead of a cryptic error.
+
+### Ghost OS Deep Integration
+
+When Ghost OS is installed, debug-toolkit connects to it internally as an MCP client — no manual orchestration needed:
+
+```
+debug_investigate detects CSS bug
+  → internally calls ghost_screenshot + ghost_read
+  → saves screenshot to .debug/screenshots/
+  → returns: { visualCapture: { screenshot, elementsFound }, visualHint }
+
+debug_verify after fix
+  → auto-captures after-fix screenshot
+  → returns: { visualVerification: { before, after } }
+```
+
+The agent never needs to call Ghost OS tools directly. Visual capture is automatic for CSS/layout bugs (configurable via `.debug/config.json`):
+
+```json
+{
+  "visual": {
+    "autoCapture": "auto",
+    "captureOnInvestigate": true,
+    "captureOnVerify": true
+  }
+}
+```
+
+Options: `"auto"` (default — captures on visual bugs), `"manual"` (agent-triggered via `debug_visual`), `"off"`.
+
+Without Ghost OS, all visual features gracefully fall back to advisory hints.
+
+### Installing Integrations
+
+**From the terminal:**
+```bash
+npx debug-toolkit install
+```
+
+Shows available integrations, marks which can be auto-installed vs manual-only, and lets you pick:
+
+```
+  AVAILABLE INTEGRATIONS
+    1) Lighthouse [auto] — Performance profiling (Web Vitals)
+       npm install -g lighthouse
+    2) Chrome [auto] — Required for Lighthouse headless testing
+       brew install --cask google-chrome
+    3) Ghost OS [auto] — Visual debugging — screenshots, DOM capture (macOS)
+       brew install ghostwright/ghost-os/ghost-os
+
+    a) Install all auto-installable (Lighthouse, Chrome, Ghost OS)
+
+  Select (numbers comma-separated, 'a' for all, Enter to skip):
+```
+
+**From the agent (mid-conversation):**
+
+The agent can check and install integrations without the user leaving the chat, via the `debug_setup` MCP tool:
+
+```
+debug_setup({ action: "check" })
+→ { available: ["Chrome"], missing: ["Lighthouse", "Ghost OS"], autoInstallable: ["lighthouse"] }
+
+debug_setup({ action: "install", integration: "lighthouse" })
+→ { success: true, message: "Lighthouse installed successfully" }
+```
+
+| Integration | Auto-Install | Agent-Installable | Method |
+|---|---|---|---|
+| Lighthouse | ✅ | ✅ | `npm install -g lighthouse` |
+| Chrome | ✅ (macOS/Linux) | ✅ | `brew install --cask google-chrome` (macOS) |
+| Ghost OS | ✅ (macOS) | ✅ | `brew install ghostwright/ghost-os/ghost-os` |
+| Claude Preview | ✅ Built-in | N/A | Already in Claude Code |
+
+### Health Check
+
+Run anytime to verify your setup:
+
+```bash
+npx debug-toolkit doctor
+```
+
+```
+  CORE
+  ✓ Node.js 22.19.0
+  ✓ Git available
+  ✓ .debug/ directory exists
+
+  PERFORMANCE (optional)
+  ✗ Lighthouse not found
+      npm install -g lighthouse
+  ✓ Chrome available
+
+  VISUAL DEBUGGING (optional)
+  ✓ Ghost OS configured
+  ✗ Claude Preview not configured
+      Add Claude Preview MCP server to .mcp.json
+```
+
+### Capability-Aware Runtime
+
+The MCP server detects available integrations at startup and connects to Ghost OS if available. Tool behavior adapts:
+
+- **Visual bugs:** If Ghost OS is connected, `debug_investigate` auto-captures screenshots and DOM state. If not, it suggests manual tools or shows setup guidance.
+- **Performance:** If Lighthouse isn't installed, `debug_perf` returns setup instructions immediately instead of failing after a 60-second timeout.
+- **Verification:** If a visual bug was captured during investigation, `debug_verify` auto-captures an after-fix screenshot for comparison.
+- **SKILL.md:** Includes a capabilities table so the agent knows upfront which tools are available — no wasted calls.
 
 ## See It Work
 
@@ -46,42 +201,6 @@ Run `npx debug-toolkit demo` — creates a temp project with a real bug, walks t
   [WARNING] TypeError has occurred 4 times in src/api.ts
   [WARNING] Possible regression: was fixed before but reappeared
 ```
-
-<details>
-<summary>Full demo output (value report)</summary>
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  VALUE REPORT                                           │
-└─────────────────────────────────────────────────────────┘
-  What the agent gathered in one debug session:
-
-    ✓ Error classification     TypeError, type error, severity high
-    ✓ Source code at crash     Exact line with surrounding context
-    ✓ Git context              Branch, commit, recent changes
-    ✓ Runtime environment      Node version, frameworks, env vars (redacted)
-    ✓ Instrumented values      users = undefined (tagged, linked to hypothesis)
-    ✓ Verification result      Exit code 0, 0 errors
-    ✓ Causal chain             error in api.ts caused by bug in db.ts
-    ✓ Diagnosis persisted      Searchable in future sessions
-    ✓ Git SHA tagged           Staleness detection for future recall
-    ✓ Pattern detection        Recurring errors, hot files, regressions
-
-  Data points collected: 17
-  Time elapsed: 2.9s
-  Memory entries: 4
-  Patterns detected: 5
-
-  Without debug-toolkit:
-    User pastes error → agent guesses fix → repeat 5-8 times
-    Typical: 8-12 conversation turns, no learning
-
-  With debug-toolkit:
-    investigate → instrument → capture → fix → verify → cleanup
-    1-2 turns with full context. Diagnosis saved for next time.
-```
-
-</details>
 
 ## The Problem
 
@@ -124,16 +243,16 @@ One debug session. Full context. Diagnosis saved for next time.
 ### Any project (JS/TS/Python/Go)
 
 ```bash
-npx debug-toolkit init
+npx debug-toolkit
 ```
 
-Generates `.claude/mcp.json`, installs a pre-commit safety hook, detects your dev command. Restart Claude Code and you're done.
+Guided setup: detects your project, writes `.mcp.json`, installs hooks and rules. Restart Claude Code and you're done.
 
 ### Tauri projects (auto-detected)
 
 ```bash
 cd my-tauri-app
-npx debug-toolkit init
+npx debug-toolkit
 ```
 
 If `src-tauri/` exists, debug-toolkit automatically:
@@ -145,7 +264,7 @@ If `src-tauri/` exists, debug-toolkit automatically:
 
 ### Manual MCP config
 
-Add to `.claude/mcp.json`:
+Add to `.mcp.json`:
 
 ```json
 {
@@ -184,24 +303,31 @@ npx debug-toolkit serve -- cargo tauri dev
 - Git context (branch, commit, recent changes to those files)
 - Runtime environment (Node/Rust version, frameworks, env vars — secrets redacted)
 - Past solutions from memory (with staleness info and causal chains)
+- Triage classification (trivial/medium/complex) with explanation
+- Proactive suggestions from high-confidence memory matches
+- Auto-captured screenshot + DOM state on visual bugs (via Ghost OS, when connected)
+- Token-budgeted response (auto-compressed to fit context windows)
 
 ```
 Input:  { error: "TypeError: Cannot read properties of undefined (reading 'map')" }
-Output: { error, sourceCode, git, environment, pastSolutions, nextStep }
+Output: { error, sourceCode, git, environment, pastSolutions, nextStep, triage, _budget }
+
+Input:  { error: "the nav bar overlaps the hero section", files: ["src/Nav.css"] }
+Output: { ..., visualCapture: { screenshot, elementsFound }, visualHint: { isVisualBug: true } }
 ```
 
 ### debug_recall
 
-Search past debug sessions for similar errors. Returns diagnoses ranked by relevance, with staleness tracking (has the code changed since?) and causal chains (where was the actual bug?).
+Search past debug sessions for similar errors. Returns diagnoses ranked by confidence × relevance, with staleness tracking and causal chains. Pass `explain: true` for a factor-by-factor confidence breakdown.
 
 ```
-Input:  { query: "TypeError undefined map" }
-Output: { matches: [{ diagnosis, stale, rootCause }] }
+Input:  { query: "TypeError undefined map", explain: true }
+Output: { matches: [{ diagnosis, stale, rootCause, confidence, _explanation }] }
 ```
 
 ### debug_patterns
 
-Detect systemic issues across all past sessions:
+Detect systemic issues across all past sessions + debug telemetry:
 
 | Pattern | What it finds |
 |---------|--------------|
@@ -210,9 +336,11 @@ Detect systemic issues across all past sessions:
 | **Regression** | Bug fixed once, came back |
 | **Error cluster** | Multiple errors within 2 hours |
 
+Also returns: `suggestions` (preventive actions), `telemetry` (fix rate, memory effectiveness, top errors).
+
 ### debug_instrument
 
-Add tagged logging to source files. Supports JS/TS, Python, Go, and Rust:
+Add tagged logging to source files. Supports JS/TS, Python, Go, and Rust. Supports conditional instrumentation:
 
 | Language | Output |
 |----------|--------|
@@ -221,7 +349,7 @@ Add tagged logging to source files. Supports JS/TS, Python, Go, and Rust:
 | Go | `fmt.Printf("[DBG_001] %v\n", expr)` |
 | Rust | `eprintln!("[DBG_001] {:?}", expr)` |
 
-Each marker links to a hypothesis. Respects indentation. Auto-cleans on cleanup.
+Pass `condition: "value === null"` to wrap the log in an `if` block — no spam on high-frequency code paths.
 
 ### debug_capture
 
@@ -229,7 +357,7 @@ Run a command and capture output, or drain buffered events from terminal, browse
 
 ### debug_verify
 
-After applying a fix, run the test command and get a clear pass/fail with exit code and error output.
+After applying a fix, run the test command and get a clear pass/fail with exit code and error output. Auto-saves the diagnosis to memory on pass. Tracks outcome in telemetry.
 
 ### debug_cleanup
 
@@ -251,17 +379,72 @@ Remove ALL instrumentation, verify files are restored, and save the diagnosis + 
 
 Lightweight view of current state: hypotheses, active instruments, recent captures.
 
+### debug_perf
+
+Capture a Lighthouse performance snapshot for a URL. Pass `phase: "before"` before a fix and `phase: "after"` to get a comparison. Requires Lighthouse + Chrome (run `npx debug-toolkit doctor` to check).
+
+```
+Input:  { sessionId, url, phase?: "before" | "after" }
+Output: { LCP, CLS, INP, TBT, speedIndex, comparison? }
+```
+
+### debug_visual
+
+Capture visual state via Ghost OS — screenshot, element inspection, annotated view, or before/after comparison. Requires Ghost OS to be installed and connected.
+
+```
+Input:  { sessionId, action: "screenshot" }
+Output: { screenshot: ".debug/screenshots/dbg_xxx_manual_123.png" }
+
+Input:  { sessionId, action: "inspect", query: "#nav-bar" }
+Output: { elements: [{ role: "AXGroup", name: "nav-bar", actionable: true }], count: 1 }
+
+Input:  { sessionId, action: "annotate" }
+Output: { screenshot: "...", labels: [{ id: 1, role: "AXButton", name: "Submit", x: 620, y: 350 }] }
+
+Input:  { sessionId, action: "compare" }
+Output: { before: ".debug/screenshots/..._investigate_...", after: ".debug/screenshots/..._compare_..." }
+```
+
+### debug_setup
+
+Check, install, and manage integrations from within the agent conversation.
+
+```
+Input:  { action: "check" }
+Output: { integrations: [...], summary: { available, missing, autoInstallable } }
+
+Input:  { action: "install", integration: "lighthouse" }
+Output: { success: true, message: "Lighthouse installed successfully" }
+
+Input:  { action: "connect" }
+Output: { connected: true, message: "Ghost OS connected successfully" }
+
+Input:  { action: "disconnect" }
+Output: { disconnected: true, message: "Ghost OS disconnected" }
+```
+
 ## Memory System
 
-debug-toolkit learns from every session:
+debug-toolkit learns from every session. The memory system is designed to scale:
 
-**Recall** — When you investigate a new error, it auto-searches past diagnoses. If a similar error was solved before, the agent gets the previous diagnosis, which files were involved, and the causal chain.
+**Write-Ahead Log** — Mutations are appended as single JSON lines instead of rewriting the entire file. Full compaction runs when the WAL exceeds 50 entries or 100KB.
 
-**Staleness** — Every diagnosis is tagged with the git SHA. When recalled, the system checks if the referenced files have changed. Stale diagnoses are flagged but still shown.
+**Inverted Index** — Keyword-based recall uses a per-project inverted index with incremental updates. Searches are instant regardless of memory size.
 
-**Causal chains** — Records where the error appeared vs. where the actual bug was. Next time, the agent goes straight to the cause file instead of the symptom.
+**Staleness with TTL Cache** — Git checks are cached for 5 minutes. Repeated recalls within that window skip all subprocess spawns.
 
-**Patterns** — Detects recurring errors, hot files, regressions, and error clusters across all sessions.
+**Confidence Scoring** — Each memory entry has a composite confidence score (0–100) based on age, file drift, and usage. High-confidence matches are surfaced proactively.
+
+**Causal Chains** — Records where the error appeared vs. where the actual bug was. Next time, the agent goes straight to the cause file instead of the symptom.
+
+**Pattern Detection** — Detects recurring errors, hot files, regressions, and error clusters. Results are cached by generation counter — recomputed only when data changes.
+
+**Deferred Archival** — Stale entries are archived at most once per hour (not on every search). Archived entries are physically moved to `.debug/archive/YYYY-MM.json` monthly files — the main memory file actually shrinks.
+
+**Knowledge Packs** — Export and import debug memory across projects. `exportPack` supports `includeArchived: true` to include archived entries.
+
+**Telemetry** — Every verified fix is tracked with outcome, duration, error type, and memory effectiveness. Capped at 500 entries.
 
 ## Language Support
 
@@ -270,6 +453,7 @@ debug-toolkit learns from every session:
 | Stack trace parsing | Node.js frames | Python tracebacks | — | Panics, backtraces, cargo errors |
 | Error classification | TypeError, ReferenceError, etc. | — | — | Panic, borrow, Tauri IPC/capability/plugin |
 | Code instrumentation | `console.log` | `print()` | `fmt.Printf` | `eprintln!` |
+| Conditional instrumentation | `if (cond) console.log(...)` | `if cond: print(...)` | `if cond { fmt.Printf(...) }` | `if cond { eprintln!(...) }` |
 | Source extraction | Yes | Yes | Yes | Yes |
 | Log file tailing | — | — | — | `tauri-plugin-log` auto-discovery |
 | Environment detection | package.json, frameworks | Python version | — | Cargo.toml, tauri.conf.json, plugins |
@@ -281,31 +465,136 @@ debug-toolkit learns from every session:
 - **Secret redaction** — tokens, API keys, passwords, JWTs auto-redacted before storage
 - **Localhost-only proxy** — binds to 127.0.0.1
 - **Pre-commit hook** — blocks commits containing debug markers
-- **Atomic writes** — temp file + rename, no corruption on crash
+- **Atomic writes** — temp file + rename via WAL, no corruption on crash
 - **`.debug/` auto-gitignored**
+- **Pack import sanitization** — path traversal blocked, pack version validated
+
+## Testing
+
+```bash
+npm test                    # 79 tests across 19 files
+npm run test:watch          # watch mode
+npx debug-toolkit demo     # full workflow with real bug
+npx debug-toolkit doctor   # verify environment setup
+```
+
+## Prerequisites
+
+### Required
+
+| Requirement | Minimum Version | Check |
+|-------------|----------------|-------|
+| **Node.js** | ≥20.19 or ≥22.12 | `node --version` |
+| **npm** | Comes with Node | `npm --version` |
+| **Git** | Any recent version | `git --version` |
+
+### Optional (for enhanced capabilities)
+
+| Requirement | Platform | What It Enables | Install |
+|-------------|----------|----------------|---------|
+| **Lighthouse** | Any | `debug_perf` — Web Vitals profiling | `npm install -g lighthouse` |
+| **Chrome** | Any | Headless browser for Lighthouse | [google.com/chrome](https://google.com/chrome) |
+| **Ghost OS** | macOS only | Auto-screenshots, DOM capture, visual debugging | `brew install ghostwright/ghost-os/ghost-os` |
+| **Homebrew** | macOS | Required for Ghost OS + Chrome auto-install | [brew.sh](https://brew.sh) |
+
+### macOS-Specific (for Ghost OS)
+
+Ghost OS requires system permissions that must be granted manually:
+
+1. **Accessibility** — System Settings → Privacy & Security → Accessibility → Enable for Ghost OS
+2. **Input Monitoring** — System Settings → Privacy & Security → Input Monitoring → Enable for Ghost OS
+3. **Vision sidecar** (optional) — For web app visual grounding. Set up via `ghost setup`
+
+These permissions cannot be granted programmatically. The first time Ghost OS runs, macOS will prompt for each permission.
+
+### What `npx debug-toolkit doctor` Checks
+
+Run `npx debug-toolkit doctor` to verify all prerequisites at once. It groups checks into:
+
+- **Core** (required): Node.js version, Git, `.debug/` directory
+- **Performance** (optional): Lighthouse CLI, Chrome binary
+- **Visual** (optional): Ghost OS configuration, Claude Preview availability
 
 ## Architecture
 
-15 files, 3,451 lines of TypeScript. 4 npm dependencies.
+26 source files, ~7,000 lines of TypeScript. 5 runtime dependencies, 1 dev dependency (vitest).
 
 ```
 src/
-  mcp.ts          473 lines  — 8 tools + 1 resource + MCP server
-  context.ts      420 lines  — Investigation engine (stack parsing, source, git, env)
-  demo.ts         398 lines  — Self-contained interactive demo
-  memory.ts       369 lines  — Cross-session memory with staleness + patterns
-  capture.ts      276 lines  — Ring buffers, terminal pipe, Tauri log tailing
-  proxy.ts        200 lines  — HTTP proxy + HTML injection + WebSocket
-  index.ts        204 lines  — CLI entry point (mcp, serve, init, demo, clean)
-  security.ts     185 lines  — Path traversal, expression validation, redaction
-  session.ts      162 lines  — Data model, atomic persistence, marker index
-  injected.js     151 lines  — Browser console/network/error capture script
-  instrument.ts   140 lines  — Language-aware instrumentation (JS/TS/Py/Go/Rust)
-  cleanup.ts      126 lines  — Single-pass marker removal with verification
-  cli.ts          125 lines  — ANSI terminal UI
-  hook.ts         122 lines  — Git pre-commit hook
-  methodology.ts  100 lines  — Always-available debugging guide
+  index.ts         — CLI entry (guided setup, init, install, doctor, serve, export, import)
+  mcp.ts           — 13 tools + 1 resource + MCP server + Ghost OS bridge
+  ghost-bridge.ts  — MCP client for Ghost OS (screenshots, DOM, inspect)
+  context.ts       — Investigation engine (stack parsing, source, git, env)
+  memory.ts        — WAL-backed memory with inverted index + staleness + patterns
+  capture.ts       — Ring buffers, terminal pipe, build error parsing, Tauri logs
+  session.ts       — Data model, atomic persistence, visual + perf context
+  instrument.ts    — Language-aware instrumentation (JS/TS/Py/Go/Rust)
+  cleanup.ts       — Single-pass marker removal with verification
+  adapters.ts      — Environment detection, capability checks, integration installer
+  triage.ts        — Error complexity classification (trivial/medium/complex)
+  suggestions.ts   — Preventive suggestions from debug patterns
+  confidence.ts    — Memory confidence scoring (age, drift, usage)
+  packs.ts         — Knowledge pack export/import (with archived entries)
+  perf.ts          — Lighthouse CLI runner + metric extraction
+  budget.ts        — Token budget estimation + response compression
+  explain.ts       — Decision explainability (triage, confidence, archival)
+  telemetry.ts     — Debug session outcome tracking + fix rates
+  utils.ts         — Shared utilities (atomicWrite, tokenize, WAL paths, screenshots)
+  demo.ts          — Self-contained interactive demo
+  proxy.ts         — HTTP proxy + HTML injection + WebSocket
+  security.ts      — Path traversal, expression validation, redaction
+  cli.ts           — ANSI terminal UI + interactive prompts
+  hook.ts          — Git pre-commit hook
+  methodology.ts   — Always-available debugging guide
+  injected.js      — Browser console/network/error capture script
 ```
+
+## Changelog
+
+### v0.10.0 — Memory Scaling + Integration Overhaul + Ghost OS
+- Ghost OS deep integration — MCP client bridge for auto-screenshots, DOM capture
+- `debug_visual` tool — screenshot, inspect, annotate, before/after compare
+- Auto-capture on visual bugs (configurable: auto/manual/off)
+- Before/after screenshot comparison on `debug_verify`
+- Ghost OS brew-installable on macOS via `npx debug-toolkit install`
+- Write-Ahead Log eliminates full JSON rewrite on every recall
+- Store cache with mtime validation, multi-project index safety
+- Incremental index updates, staleness TTL cache, pattern detection cache
+- Deferred archival (1hr cooldown), physical purge to monthly archive files
+- Budget overflow guard with nuclear fallback
+- `npx debug-toolkit doctor` — environment health check
+- `npx debug-toolkit install` — interactive integration installer
+- `debug_setup` MCP tool — check/install/connect/disconnect integrations
+- Guided interactive setup via `npx debug-toolkit` (TTY-aware)
+- Capability-aware runtime adapts to what's installed
+- Dynamic SKILL.md capabilities table
+- `@modelcontextprotocol/sdk` added for MCP client capabilities
+
+### v0.9.0 — Performance + Observability
+- Inverted index for O(1) memory recall
+- Batch git staleness (10-50x faster)
+- Token budget system (4K auto-compression)
+- Explain mode for confidence breakdown
+- Conditional instrumentation
+- Debug telemetry (fix rates, memory effectiveness)
+
+### v0.8.0 — Memory Intelligence
+- Confidence scoring (age, drift, usage)
+- Proactive memory (>80% confidence auto-suggests)
+- Knowledge packs (export/import)
+- Memory archival
+
+### v0.7.0 — Smart Triage
+- Triage gate (trivial/medium/complex)
+- Auto-learning on verify pass
+- Preventive suggestions
+- Smarter activation rules
+
+### v0.6.0 — Eyes + Build Integration
+- Build error auto-capture (Vite, tsc, webpack, ESLint)
+- Visual bug detection with screenshot hints
+- Lighthouse performance snapshots
+- Extended session model
 
 ## License
 

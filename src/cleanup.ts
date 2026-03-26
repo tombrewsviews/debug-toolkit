@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync } from "node:fs";
+import { join } from "node:path";
 import { type DebugSession, saveSession } from "./session.js";
 
 // --- Marker removal patterns ---
@@ -86,11 +87,8 @@ export function cleanupSession(cwd: string, session: DebugSession): CleanupResul
  */
 export function cleanupFromManifest(cwd: string): CleanupResult {
   // Scan all session files to find active instrumentation
-  const { existsSync: ex, readdirSync } = require("node:fs") as typeof import("node:fs");
-  const { join } = require("node:path") as typeof import("node:path");
-
   const sessionsDir = join(cwd, ".debug", "sessions");
-  if (!ex(sessionsDir)) return { cleaned: 0, verified: true, errors: [], filesProcessed: [] };
+  if (!existsSync(sessionsDir)) return { cleaned: 0, verified: true, errors: [], filesProcessed: [] };
 
   const allFiles = new Set<string>();
 

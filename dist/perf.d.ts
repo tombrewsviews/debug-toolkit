@@ -1,0 +1,36 @@
+/**
+ * perf.ts — Lighthouse CLI runner and metric extraction.
+ *
+ * Runs Lighthouse in headless Chrome, extracts Web Vitals,
+ * and compares before/after snapshots for regression detection.
+ */
+export interface LighthouseMetrics {
+    lcp: number | null;
+    cls: number | null;
+    inp: number | null;
+    tbt: number | null;
+    speedIndex: number | null;
+}
+interface MetricDiff {
+    lcp: number | null;
+    cls: number | null;
+    inp: number | null;
+    tbt: number | null;
+    speedIndex: number | null;
+    improved: boolean;
+}
+/**
+ * Extract Web Vitals from Lighthouse JSON output.
+ */
+export declare function extractMetrics(lighthouseResult: Record<string, any>): LighthouseMetrics;
+/**
+ * Compare before/after performance snapshots.
+ * Negative diff = improvement (lower is better for all metrics).
+ */
+export declare function compareSnapshots(before: LighthouseMetrics, after: LighthouseMetrics): MetricDiff;
+/**
+ * Run Lighthouse against a URL and return extracted metrics.
+ * Requires Chrome to be installed. Returns null on failure.
+ */
+export declare function runLighthouse(url: string, timeoutMs?: number): Promise<LighthouseMetrics | null>;
+export {};

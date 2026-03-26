@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, renameSync } from "node:fs";
+import { join } from "node:path";
 import { saveSession } from "./session.js";
 // --- Marker removal patterns ---
 // JS/Go: single-line inline markers with /* */ comments
@@ -60,10 +61,8 @@ export function cleanupSession(cwd, session) {
  */
 export function cleanupFromManifest(cwd) {
     // Scan all session files to find active instrumentation
-    const { existsSync: ex, readdirSync } = require("node:fs");
-    const { join } = require("node:path");
     const sessionsDir = join(cwd, ".debug", "sessions");
-    if (!ex(sessionsDir))
+    if (!existsSync(sessionsDir))
         return { cleaned: 0, verified: true, errors: [], filesProcessed: [] };
     const allFiles = new Set();
     for (const f of readdirSync(sessionsDir)) {

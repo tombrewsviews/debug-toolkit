@@ -10,8 +10,152 @@
  * Zero native dependencies. Fast enough for hundreds of sessions.
  */
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { computeConfidence, ARCHIVE_THRESHOLD } from "./confidence.js";
+import { memoryPath, walPath, archiveDirPath, atomicWrite, tokenize } from "./utils.js";
+const indexCacheMap = new Map();
+const MAX_CACHED_PROJECTS = 5;
+let storeGeneration = 0;
+function buildIndex(store) {
+    const idx = new Map();
+    for (const entry of store.entries) {
+        for (const kw of entry.keywords) {
+            if (!idx.has(kw))
+                idx.set(kw, new Set());
+            idx.get(kw).add(entry.id);
+        }
+    }
+    return idx;
+}
+function getIndex(cwd, store) {
+    const cached = indexCacheMap.get(cwd);
+    if (cached && cached.generation === storeGeneration)
+        return cached.index;
+    const index = buildIndex(store);
+    // LRU eviction
+    if (indexCacheMap.size >= MAX_CACHED_PROJECTS) {
+        const oldest = indexCacheMap.keys().next().value;
+        if (oldest)
+            indexCacheMap.delete(oldest);
+    }
+    indexCacheMap.set(cwd, { index, generation: storeGeneration });
+    return index;
+}
+function invalidateIndex(cwd) {
+    storeGeneration++;
+    if (cwd) {
+        indexCacheMap.delete(cwd);
+    }
+    else {
+        indexCacheMap.clear();
+    }
+}
+function addToIndex(cwd, entry) {
+    const cached = indexCacheMap.get(cwd);
+    if (!cached)
+        return; // No cache to update; lazy rebuild on next getIndex
+    for (const kw of entry.keywords) {
+        if (!cached.index.has(kw))
+            cached.index.set(kw, new Set());
+        cached.index.get(kw).add(entry.id);
+    }
+    cached.generation = ++storeGeneration;
+    indexCacheMap.set(cwd, cached);
+}
+function removeFromIndex(cwd, entryId) {
+    const cached = indexCacheMap.get(cwd);
+    if (!cached)
+        return;
+    for (const [, idSet] of cached.index) {
+        idSet.delete(entryId);
+    }
+    cached.generation = ++storeGeneration;
+}
+const WAL_COMPACT_LINES = 50;
+const WAL_COMPACT_BYTES = 100 * 1024; // 100 KB
+let storeCache = null;
+function appendWal(cwd, mutation) {
+    const p = walPath(cwd);
+    const dir = dirname(p);
+    if (!existsSync(dir))
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+    appendFileSync(p, JSON.stringify(mutation) + "\n", { mode: 0o600 });
+    // Invalidate store cache so next loadStore re-reads
+    storeCache = null;
+}
+function readWal(cwd) {
+    const p = walPath(cwd);
+    if (!existsSync(p))
+        return [];
+    try {
+        const lines = readFileSync(p, "utf-8").split("\n").filter(Boolean);
+        const mutations = [];
+        for (const line of lines) {
+            try {
+                mutations.push(JSON.parse(line));
+            }
+            catch { /* skip corrupt lines */ }
+        }
+        return mutations;
+    }
+    catch {
+        return [];
+    }
+}
+function replayWal(store, mutations) {
+    for (const m of mutations) {
+        const entry = store.entries.find((e) => e.id === m.entryId);
+        if (!entry && m.op !== "remember")
+            continue;
+        switch (m.op) {
+            case "increment_recalled":
+                if (entry)
+                    entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+                break;
+            case "archive":
+                if (entry)
+                    entry.archived = true;
+                break;
+            case "update":
+                if (entry && m.data)
+                    Object.assign(entry, m.data);
+                break;
+            case "remember":
+                if (!entry && m.data) {
+                    store.entries.push(m.data);
+                }
+                break;
+        }
+    }
+}
+function compactIfNeeded(cwd) {
+    const p = walPath(cwd);
+    if (!existsSync(p))
+        return false;
+    try {
+        const stat = statSync(p);
+        const lineCount = readFileSync(p, "utf-8").split("\n").filter(Boolean).length;
+        if (lineCount >= WAL_COMPACT_LINES || stat.size >= WAL_COMPACT_BYTES) {
+            compactNow(cwd);
+            return true;
+        }
+    }
+    catch { /* ignore */ }
+    return false;
+}
+function compactNow(cwd) {
+    const store = loadStoreBase(cwd);
+    const mutations = readWal(cwd);
+    replayWal(store, mutations);
+    atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
+    try {
+        unlinkSync(walPath(cwd));
+    }
+    catch { /* ignore */ }
+    storeCache = null;
+    invalidateIndex(); // Full invalidation on compaction
+}
 // ━━━ Git helpers ━━━
 function getGitSha(cwd) {
     try {
@@ -22,60 +166,102 @@ function getGitSha(cwd) {
         return null;
     }
 }
+function isValidSha(sha) {
+    return /^[0-9a-f]{7,40}$/i.test(sha);
+}
 /**
- * Check how many commits have touched a file since a given SHA.
- * Returns null if git isn't available, 0 if unchanged, N if changed.
+ * Batch-fetch commit counts for multiple files since a given SHA.
+ * Single git process instead of one per file.
  */
-function commitsSince(cwd, sha, file) {
+function batchCommitCounts(cwd, baseSha, files) {
+    const counts = new Map();
+    if (files.length === 0)
+        return counts;
     try {
-        const count = execSync(`git rev-list --count ${sha}..HEAD -- "${file}" 2>/dev/null`, { cwd, timeout: 3000 }).toString().trim();
-        return parseInt(count, 10);
+        const result = execSync(`git log --format="" --name-only ${baseSha}..HEAD -- ${files.map(f => `"${f}"`).join(" ")}`, { cwd, timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).toString();
+        for (const line of result.split("\n")) {
+            const trimmed = line.trim();
+            if (trimmed) {
+                counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1);
+            }
+        }
     }
     catch {
-        return null;
+        // Git not available or SHA not found — treat all as unknown
     }
+    // Ensure all requested files have an entry (0 if not changed)
+    for (const f of files) {
+        if (!counts.has(f))
+            counts.set(f, 0);
+    }
+    return counts;
 }
+const stalenessCache = new Map();
+const STALENESS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 function checkStaleness(cwd, entry) {
-    if (!entry.gitSha)
+    const cacheKey = `${entry.id}:${entry.gitSha ?? "none"}`;
+    const cached = stalenessCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt)
+        return cached.result;
+    if (!entry.gitSha || !isValidSha(entry.gitSha)) {
         return { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
+    }
     let totalCommits = 0;
     const changed = [];
+    // Collect files to check via git (skip deleted files — they're stale immediately)
+    const deletedFiles = [];
+    const filesToCheck = [];
     for (const f of entry.files) {
-        // Resolve relative to cwd
         const fullPath = resolve(cwd, f);
         if (!existsSync(fullPath)) {
-            changed.push(f);
+            deletedFiles.push(f);
             totalCommits += 1; // file deleted = definitely stale
-            continue;
         }
-        const n = commitsSince(cwd, entry.gitSha, f);
-        if (n !== null && n > 0) {
-            changed.push(f);
-            totalCommits += n;
+        else {
+            filesToCheck.push(f);
         }
     }
-    // Also check causeFile if it's different from the error files
-    if (entry.rootCause?.causeFile && !entry.files.includes(entry.rootCause.causeFile)) {
-        const n = commitsSince(cwd, entry.gitSha, entry.rootCause.causeFile);
-        if (n !== null && n > 0) {
-            changed.push(entry.rootCause.causeFile);
-            totalCommits += n;
+    changed.push(...deletedFiles);
+    // Also include causeFile if distinct
+    const causeFile = entry.rootCause?.causeFile;
+    if (causeFile && !entry.files.includes(causeFile)) {
+        filesToCheck.push(causeFile);
+    }
+    // Single git call for all remaining files
+    if (filesToCheck.length > 0) {
+        const counts = batchCommitCounts(cwd, entry.gitSha, filesToCheck);
+        for (const f of filesToCheck) {
+            const n = counts.get(f) ?? 0;
+            if (n > 0) {
+                changed.push(f);
+                totalCommits += n;
+            }
         }
     }
-    if (changed.length === 0)
-        return { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
-    return {
+    if (changed.length === 0) {
+        const result = { stale: false, reason: null, commitsBehind: 0, filesChanged: [] };
+        stalenessCache.set(cacheKey, { result, expiresAt: Date.now() + STALENESS_TTL_MS });
+        return result;
+    }
+    const result = {
         stale: true,
         reason: `${changed.length} file(s) changed in ${totalCommits} commit(s) since this diagnosis`,
         commitsBehind: totalCommits,
         filesChanged: changed,
     };
+    stalenessCache.set(cacheKey, { result, expiresAt: Date.now() + STALENESS_TTL_MS });
+    return result;
 }
+// ━━━ Pattern Detection Cache ━━━
+let patternCache = null;
 /**
  * Detect patterns across all stored debug sessions.
  * Cheap — just scans the JSON array, no external calls.
  */
 export function detectPatterns(cwd) {
+    if (patternCache && patternCache.cwd === cwd && patternCache.generation === storeGeneration) {
+        return patternCache.patterns;
+    }
     const store = loadStore(cwd);
     if (store.entries.length < 2)
         return [];
@@ -168,13 +354,11 @@ export function detectPatterns(cwd) {
             }
         }
     }
+    patternCache = { cwd, generation: storeGeneration, patterns: insights };
     return insights;
 }
 // ━━━ Paths & Persistence ━━━
-function memoryPath(cwd) {
-    return join(cwd, ".debug", "memory.json");
-}
-function loadStore(cwd) {
+function loadStoreBase(cwd) {
     const p = memoryPath(cwd);
     if (!existsSync(p))
         return { version: 2, entries: [] };
@@ -188,25 +372,45 @@ function loadStore(cwd) {
                 e.rootCause = null;
         }
         store.version = 2;
+        for (const e of store.entries) {
+            if (e.timesRecalled === undefined)
+                e.timesRecalled = 0;
+            if (e.timesUsed === undefined)
+                e.timesUsed = 0;
+            if (e.archived === undefined)
+                e.archived = false;
+        }
         return store;
     }
     catch {
         return { version: 2, entries: [] };
     }
 }
-function saveStore(cwd, store) {
+export function loadStore(cwd) {
     const p = memoryPath(cwd);
-    const tmp = `${p}.tmp_${process.pid}`;
-    writeFileSync(tmp, JSON.stringify(store, null, 2));
-    renameSync(tmp, p);
+    // Check cache: same cwd and file hasn't changed
+    if (storeCache && storeCache.cwd === cwd) {
+        try {
+            const currentMtime = existsSync(p) ? statSync(p).mtimeMs : 0;
+            if (currentMtime === storeCache.mtime)
+                return storeCache.store;
+        }
+        catch { /* fall through to fresh load */ }
+    }
+    const store = loadStoreBase(cwd);
+    const mutations = readWal(cwd);
+    replayWal(store, mutations);
+    try {
+        const mtime = existsSync(p) ? statSync(p).mtimeMs : 0;
+        storeCache = { cwd, store, mtime };
+    }
+    catch { /* cache miss is fine */ }
+    return store;
 }
-// ━━━ Tokenizer ━━━
-function tokenize(text) {
-    return text
-        .toLowerCase()
-        .replace(/[^a-z0-9_./\-]/g, " ")
-        .split(/\s+/)
-        .filter((w) => w.length > 2);
+export function saveStore(cwd, store) {
+    atomicWrite(memoryPath(cwd), JSON.stringify(store, null, 2));
+    storeCache = null;
+    storeGeneration++; // Invalidate index generation but don't clear cache
 }
 // ━━━ Public API ━━━
 /**
@@ -227,6 +431,9 @@ export function remember(cwd, entry) {
         keywords,
         gitSha: getGitSha(cwd),
         rootCause: entry.rootCause ?? null,
+        timesRecalled: 0,
+        timesUsed: 0,
+        archived: false,
     };
     store.entries = store.entries.filter((e) => e.id !== full.id);
     store.entries.push(full);
@@ -234,11 +441,12 @@ export function remember(cwd, entry) {
         store.entries = store.entries.slice(-200);
     }
     saveStore(cwd, store);
+    addToIndex(cwd, full);
     return full;
 }
 /**
  * Search past debug sessions for similar errors.
- * Returns matches ranked by relevance, with staleness info and causal chains.
+ * Returns matches ranked by confidence * relevance, with staleness info and causal chains.
  */
 export function recall(cwd, query, limit = 5) {
     const store = loadStore(cwd);
@@ -247,31 +455,145 @@ export function recall(cwd, query, limit = 5) {
     const queryTokens = tokenize(query);
     if (queryTokens.length === 0)
         return [];
-    const scored = store.entries.map((entry) => {
-        let hits = 0;
-        for (const qt of queryTokens) {
-            for (const ek of entry.keywords) {
-                if (ek.includes(qt) || qt.includes(ek)) {
-                    hits++;
-                    break;
+    const now = Date.now();
+    const index = getIndex(cwd, store);
+    // Build candidate set using inverted index: map entryId → hit count
+    const hitCounts = new Map();
+    for (const qt of queryTokens) {
+        // Collect all index entries that overlap with this token (substring match)
+        for (const [kw, idSet] of index) {
+            if (kw.includes(qt) || qt.includes(kw)) {
+                for (const id of idSet) {
+                    hitCounts.set(id, (hitCounts.get(id) ?? 0) + 1);
                 }
             }
         }
-        return {
-            ...entry,
-            relevance: hits / queryTokens.length,
-            staleness: checkStaleness(cwd, entry),
-        };
-    });
-    return scored
+    }
+    // Build a lookup map for quick entry access
+    const entryById = new Map();
+    for (const e of store.entries) {
+        entryById.set(e.id, e);
+    }
+    const scored = [];
+    for (const [id, hits] of hitCounts) {
+        const entry = entryById.get(id);
+        if (!entry || entry.archived)
+            continue;
+        const relevance = hits / queryTokens.length;
+        const staleness = checkStaleness(cwd, entry);
+        const ageInDays = (now - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+        const confidence = computeConfidence({
+            ageInDays,
+            fileDriftCommits: staleness.commitsBehind,
+            timesRecalled: entry.timesRecalled,
+            timesUsed: entry.timesUsed,
+        });
+        scored.push({ ...entry, relevance, staleness, confidence });
+    }
+    const results = scored
         .filter((e) => e.relevance > 0.2)
         .sort((a, b) => {
-        // Prefer fresh over stale, then by relevance
-        if (a.staleness.stale !== b.staleness.stale)
-            return a.staleness.stale ? 1 : -1;
-        return b.relevance - a.relevance;
+        // Sort by combined confidence * relevance score
+        return (b.confidence * b.relevance) - (a.confidence * a.relevance);
     })
         .slice(0, limit);
+    // Append recall increments to WAL instead of full store rewrite
+    if (results.length > 0) {
+        const resultIds = new Set(results.map((r) => r.id));
+        for (const entry of store.entries) {
+            if (resultIds.has(entry.id)) {
+                entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+                appendWal(cwd, { op: "increment_recalled", entryId: entry.id, ts: new Date().toISOString() });
+            }
+        }
+        compactIfNeeded(cwd);
+    }
+    return results;
+}
+/**
+ * Archive memories with confidence below threshold for 30+ days.
+ * Archived memories are excluded from auto-recall.
+ */
+export function archiveStaleMemories(cwd) {
+    const store = loadStore(cwd);
+    const alreadyArchived = new Set(store.entries.filter(e => e.archived).map(e => e.id));
+    let archived = 0;
+    for (const entry of store.entries) {
+        if (entry.archived)
+            continue;
+        const ageInDays = (Date.now() - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+        if (ageInDays < 30)
+            continue;
+        const staleness = checkStaleness(cwd, entry);
+        const confidence = computeConfidence({
+            ageInDays,
+            fileDriftCommits: staleness.commitsBehind,
+            timesRecalled: entry.timesRecalled ?? 0,
+            timesUsed: entry.timesUsed ?? 0,
+        });
+        if (confidence < ARCHIVE_THRESHOLD) {
+            entry.archived = true;
+            archived++;
+        }
+    }
+    if (archived > 0) {
+        for (const entry of store.entries) {
+            if (entry.archived && !alreadyArchived.has(entry.id)) {
+                appendWal(cwd, { op: "archive", entryId: entry.id, ts: new Date().toISOString() });
+            }
+        }
+        compactIfNeeded(cwd);
+    }
+    return { archived };
+}
+// ━━━ Physical Purge ━━━
+export function purgeArchivedEntries(cwd) {
+    const store = loadStore(cwd);
+    const toArchive = store.entries.filter((e) => e.archived);
+    if (toArchive.length === 0)
+        return { purged: 0 };
+    // Group by month
+    const byMonth = new Map();
+    for (const entry of toArchive) {
+        const month = entry.timestamp.slice(0, 7); // YYYY-MM
+        if (!byMonth.has(month))
+            byMonth.set(month, []);
+        byMonth.get(month).push(entry);
+    }
+    // Write to archive files
+    const archDir = archiveDirPath(cwd);
+    if (!existsSync(archDir))
+        mkdirSync(archDir, { recursive: true, mode: 0o700 });
+    for (const [month, entries] of byMonth) {
+        const archFile = join(archDir, `${month}.json`);
+        let existing = { version: 1, entries: [] };
+        if (existsSync(archFile)) {
+            try {
+                existing = JSON.parse(readFileSync(archFile, "utf-8"));
+            }
+            catch { /* start fresh */ }
+        }
+        const existingIds = new Set(existing.entries.map((e) => e.id));
+        for (const e of entries) {
+            if (!existingIds.has(e.id))
+                existing.entries.push(e);
+        }
+        atomicWrite(archFile, JSON.stringify(existing, null, 2));
+    }
+    // Remove archived entries from main store
+    store.entries = store.entries.filter((e) => !e.archived);
+    saveStore(cwd, store);
+    return { purged: toArchive.length };
+}
+// ━━━ Deferred Archival ━━━
+let lastArchivalRun = 0;
+export function maybeArchive(cwd) {
+    if (Date.now() - lastArchivalRun < 60 * 60 * 1000)
+        return { archived: 0, purged: 0 };
+    lastArchivalRun = Date.now();
+    const archResult = archiveStaleMemories(cwd);
+    const purgeResult = purgeArchivedEntries(cwd);
+    return { archived: archResult.archived, purged: purgeResult.purged };
 }
 /**
  * Get memory stats.

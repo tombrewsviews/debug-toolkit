@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureGitignore } from "./security.js";
+import { atomicWrite } from "./utils.js";
 
 // --- Types ---
 
@@ -26,10 +27,42 @@ export interface InstrumentationRecord {
 export interface Capture {
   id: string;
   timestamp: string;
-  source: "terminal" | "browser-console" | "browser-network" | "browser-error" | "environment" | "tauri-log";
+  source: "terminal" | "browser-console" | "browser-network" | "browser-error" | "environment" | "tauri-log" | "build-error" | "visual" | "perf";
   markerTag: string | null;
   data: unknown;
   hypothesisId: string | null;
+}
+
+export interface ScreenshotRecord {
+  id: string;
+  timestamp: string;
+  tool: "ghost_screenshot" | "preview_screenshot" | "none";
+  reference: string; // file path or base64 data URI
+}
+
+export interface DomSnapshot {
+  timestamp: string;
+  tool: "ghost_read" | "preview_snapshot";
+  elements: Array<{ role: string; name: string; visible: boolean }>;
+}
+
+export interface VisualContext {
+  screenshots: ScreenshotRecord[];
+  domSnapshot: DomSnapshot | null;
+}
+
+export interface PerfSnapshot {
+  id: string;
+  timestamp: string;
+  url: string;
+  metrics: {
+    lcp: number | null;      // Largest Contentful Paint (ms)
+    cls: number | null;      // Cumulative Layout Shift
+    inp: number | null;      // Interaction to Next Paint (ms)
+    tbt: number | null;      // Total Blocking Time (ms)
+    speedIndex: number | null;
+  };
+  phase: "before" | "after";
 }
 
 export interface FileSnapshot {
@@ -49,6 +82,8 @@ export interface DebugSession {
   captures: Capture[];
   snapshots: Record<string, FileSnapshot>;
   diagnosis: string | null;
+  visualContext: VisualContext | null;
+  perfSnapshots: PerfSnapshot[];
   // Performance: pre-built index from markerTag → hypothesisId
   _markerIndex: Record<string, string>;
 }
@@ -80,11 +115,7 @@ function ensureDirs(cwd: string): void {
   ensureGitignore(cwd);
 }
 
-function atomicWrite(filePath: string, data: string): void {
-  const tmp = `${filePath}.tmp_${process.pid}`;
-  writeFileSync(tmp, data, { mode: 0o600 });
-  renameSync(tmp, filePath);
-}
+// atomicWrite imported from utils.ts
 
 // --- Session CRUD ---
 
@@ -101,6 +132,8 @@ export function createSession(cwd: string, problem: string): DebugSession {
     captures: [],
     snapshots: {},
     diagnosis: null,
+    visualContext: null,
+    perfSnapshots: [],
     _markerIndex: {},
   };
   saveSession(cwd, session);

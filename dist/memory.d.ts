@@ -20,12 +20,20 @@ export interface MemoryEntry {
     keywords: string[];
     gitSha: string | null;
     rootCause: CausalLink | null;
+    timesRecalled: number;
+    timesUsed: number;
+    archived: boolean;
+    source?: "local" | "external";
 }
 export interface CausalLink {
     trigger: string;
     errorFile: string;
     causeFile: string;
     fixDescription: string;
+}
+interface MemoryStore {
+    version: number;
+    entries: MemoryEntry[];
 }
 /**
  * Check staleness of a memory entry — have the referenced files changed?
@@ -47,21 +55,39 @@ export interface PatternInsight {
  * Cheap — just scans the JSON array, no external calls.
  */
 export declare function detectPatterns(cwd: string): PatternInsight[];
+export declare function loadStore(cwd: string): MemoryStore;
+export declare function saveStore(cwd: string, store: MemoryStore): void;
 /**
  * Save a completed debug session to memory.
  * Auto-captures the current git SHA for staleness tracking.
  */
-export declare function remember(cwd: string, entry: Omit<MemoryEntry, "keywords" | "gitSha" | "rootCause"> & {
+export declare function remember(cwd: string, entry: Omit<MemoryEntry, "keywords" | "gitSha" | "rootCause" | "timesRecalled" | "timesUsed" | "archived" | "source"> & {
     rootCause?: CausalLink | null;
+    source?: "local" | "external";
 }): MemoryEntry;
 /**
  * Search past debug sessions for similar errors.
- * Returns matches ranked by relevance, with staleness info and causal chains.
+ * Returns matches ranked by confidence * relevance, with staleness info and causal chains.
  */
 export declare function recall(cwd: string, query: string, limit?: number): Array<MemoryEntry & {
     relevance: number;
     staleness: StalenessInfo;
+    confidence: number;
 }>;
+/**
+ * Archive memories with confidence below threshold for 30+ days.
+ * Archived memories are excluded from auto-recall.
+ */
+export declare function archiveStaleMemories(cwd: string): {
+    archived: number;
+};
+export declare function purgeArchivedEntries(cwd: string): {
+    purged: number;
+};
+export declare function maybeArchive(cwd: string): {
+    archived: number;
+    purged: number;
+};
 /**
  * Get memory stats.
  */
@@ -71,3 +97,4 @@ export declare function memoryStats(cwd: string): {
     newestDate: string | null;
     patterns: PatternInsight[];
 };
+export {};

@@ -252,7 +252,7 @@ function getEnvironment(cwd) {
     }
     return env;
 }
-function classifyError(raw) {
+export function classifyError(raw) {
     const r = {
         type: "Unknown",
         summary: raw.split("\n")[0]?.slice(0, 200) ?? "",
@@ -335,6 +335,21 @@ function classifyError(raw) {
         }
     }
     return r;
+}
+// --- Visual error detection ---
+const CSS_EXTENSIONS = /\.(css|scss|sass|less|stylus|styl)$/i;
+const VISUAL_KEYWORDS = /looks?\s+(wrong|off|different|broken)|layout|visual|css|style|animation|render|display|position|z-index|overflow|responsive|mobile|tablet|screen|viewport|font|color|opacity|margin|padding|align|flex|grid|stutter|flicker|overlap/i;
+/**
+ * Determine if an error is visual/CSS-related, warranting screenshot capture.
+ */
+export function isVisualError(category, file, description) {
+    // CSS file involvement
+    if (file && CSS_EXTENSIONS.test(file))
+        return true;
+    // Visual error categories
+    if (category === "logic" && description && VISUAL_KEYWORDS.test(description))
+        return true;
+    return false;
 }
 export function investigate(errorText, cwd, hintFiles) {
     const frames = parseStackFrames(errorText, cwd);

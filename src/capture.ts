@@ -19,6 +19,91 @@ function extractMarkerTag(text: string): string | null {
   return m ? `DBG_${m[1]}` : null;
 }
 
+// --- Build error parsing ---
+
+export interface BuildError {
+  tool: "vite" | "tsc" | "webpack" | "eslint" | "postcss" | "unknown";
+  file: string | null;
+  line: number | null;
+  column: number | null;
+  code: string | null;    // e.g., "TS2322", "E0308"
+  message: string;
+  raw: string;
+}
+
+const BUILD_PATTERNS: Array<{
+  test: RegExp;
+  tool: BuildError["tool"];
+  extract: (text: string) => Partial<BuildError> | null;
+}> = [
+  // Vite / PostCSS errors: [vite:css][postcss] message
+  {
+    test: /\[vite[:\]]/i,
+    tool: "vite",
+    extract: (text) => {
+      const msg = text.match(/\[vite[^\]]*\](?:\[([^\]]+)\])?\s*(.+)/)?.[2] ?? text;
+      const fileLine = text.match(/(\S+\.(?:css|scss|less|tsx?|jsx?)):?(\d+)?/);
+      return { message: msg, file: fileLine?.[1] ?? null, line: fileLine?.[2] ? +fileLine[2] : null };
+    },
+  },
+  // TypeScript: src/file.tsx(15,3): error TS2322: message
+  {
+    test: /error TS\d+:/,
+    tool: "tsc",
+    extract: (text) => {
+      const m = text.match(/(.+?)\((\d+),(\d+)\):\s*error\s+(TS\d+):\s*(.+)/);
+      if (!m) return null;
+      return { file: m[1], line: +m[2], column: +m[3], code: m[4], message: m[5] };
+    },
+  },
+  // webpack: ERROR in ./path
+  {
+    test: /ERROR in \.\//,
+    tool: "webpack",
+    extract: (text) => {
+      const file = text.match(/ERROR in (\.\/.+)/)?.[1] ?? null;
+      const msg = text.match(/(?:Error|Module not found):\s*(.+)/)?.[1] ?? text;
+      return { file, message: msg };
+    },
+  },
+  // ESLint: path/file.tsx\n  15:3  error  message  rule-name
+  {
+    test: /\d+:\d+\s+error\s+/,
+    tool: "eslint",
+    extract: (text) => {
+      const lines = text.split("\n");
+      let file: string | null = null;
+      for (const line of lines) {
+        const m = line.match(/^\s*(\d+):(\d+)\s+error\s+(.+?)\s{2,}(\S+)/);
+        if (m) {
+          return { file, line: +m[1], column: +m[2], message: m[3], code: m[4] };
+        }
+        if (line.trim() && !line.match(/^\s*\d+:\d+/)) file = line.trim();
+      }
+      return null;
+    },
+  },
+];
+
+export function parseBuildError(text: string): BuildError | null {
+  for (const pattern of BUILD_PATTERNS) {
+    if (pattern.test.test(text)) {
+      const extracted = pattern.extract(text);
+      if (!extracted) continue;
+      return {
+        tool: pattern.tool,
+        file: extracted.file ?? null,
+        line: extracted.line ?? null,
+        column: extracted.column ?? null,
+        code: extracted.code ?? null,
+        message: extracted.message ?? text.split("\n")[0] ?? "",
+        raw: text,
+      };
+    }
+  }
+  return null;
+}
+
 // --- Ring buffer: fixed-size, no allocation on push ---
 
 class RingBuffer<T> {
@@ -47,6 +132,7 @@ class RingBuffer<T> {
     }
     this.count = 0;
     this.head = 0;
+    this.buf = new Array(this.cap);  // Release references
     return result;
   }
 
@@ -57,6 +143,14 @@ class RingBuffer<T> {
 
 export const terminalBuffer = new RingBuffer<Capture>(500);
 export const browserBuffer = new RingBuffer<Capture>(200);
+export const buildBuffer = new RingBuffer<BuildError>(100);
+
+/**
+ * Drain all accumulated build errors from the buffer.
+ */
+export function drainBuildErrors(): BuildError[] {
+  return buildBuffer.drain();
+}
 
 // --- Terminal pipe ---
 
@@ -66,6 +160,10 @@ export function pipeProcess(child: ChildProcess): void {
     stream.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
       (isErr ? process.stderr : process.stdout).write(chunk);
+
+      // Check full chunk for multiline build errors (Vite, tsc, etc.)
+      const buildErr = parseBuildError(text);
+      if (buildErr) buildBuffer.push(buildErr);
 
       for (const line of text.split("\n")) {
         const t = line.trim();

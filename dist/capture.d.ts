@@ -1,5 +1,15 @@
 import { type ChildProcess } from "node:child_process";
 import { type Capture, type DebugSession } from "./session.js";
+export interface BuildError {
+    tool: "vite" | "tsc" | "webpack" | "eslint" | "postcss" | "unknown";
+    file: string | null;
+    line: number | null;
+    column: number | null;
+    code: string | null;
+    message: string;
+    raw: string;
+}
+export declare function parseBuildError(text: string): BuildError | null;
 declare class RingBuffer<T> {
     private buf;
     private head;
@@ -12,6 +22,11 @@ declare class RingBuffer<T> {
 }
 export declare const terminalBuffer: RingBuffer<Capture>;
 export declare const browserBuffer: RingBuffer<Capture>;
+export declare const buildBuffer: RingBuffer<BuildError>;
+/**
+ * Drain all accumulated build errors from the buffer.
+ */
+export declare function drainBuildErrors(): BuildError[];
 export declare function pipeProcess(child: ChildProcess): void;
 export declare function runAndCapture(command: string, timeoutMs?: number): Promise<Capture[]>;
 export declare function onBrowserEvent(event: {
