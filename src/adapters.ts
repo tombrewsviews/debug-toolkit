@@ -225,3 +225,84 @@ export function formatDoctorReport(caps: EnvironmentCapabilities): DoctorCheck[]
 
   return checks;
 }
+
+// ━━━ Integration Installation ━━━
+
+export interface InstallableIntegration {
+  id: string;
+  name: string;
+  description: string;
+  available: boolean;
+  autoInstallable: boolean;
+  installCommand: string | null; // null = manual only
+  manualSteps: string | null;    // instructions for manual install
+}
+
+export function listInstallable(caps: EnvironmentCapabilities): InstallableIntegration[] {
+  const platform = process.platform;
+
+  const chromeCmd = platform === "darwin"
+    ? "brew install --cask google-chrome"
+    : platform === "linux"
+      ? "wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && sudo dpkg -i google-chrome-stable_current_amd64.deb && rm google-chrome-stable_current_amd64.deb"
+      : null;
+
+  return [
+    {
+      id: "lighthouse",
+      name: "Lighthouse",
+      description: "Performance profiling (Web Vitals: LCP, CLS, INP, TBT)",
+      available: caps.perf.lighthouseAvailable,
+      autoInstallable: true,
+      installCommand: "npm install -g lighthouse",
+      manualSteps: null,
+    },
+    {
+      id: "chrome",
+      name: "Chrome",
+      description: "Required for Lighthouse headless performance testing",
+      available: caps.perf.chromeAvailable,
+      autoInstallable: chromeCmd !== null,
+      installCommand: chromeCmd,
+      manualSteps: "Install from https://google.com/chrome",
+    },
+    {
+      id: "ghost-os",
+      name: "Ghost OS",
+      description: "Visual debugging — screenshots, DOM capture, UI automation",
+      available: caps.visual.ghostOsConfigured,
+      autoInstallable: false,
+      installCommand: null,
+      manualSteps: "Install Ghost OS from https://github.com/ghostwright/ghost-os then run 'ghost setup'",
+    },
+    {
+      id: "claude-preview",
+      name: "Claude Preview",
+      description: "Browser preview with screenshots and element inspection",
+      available: caps.visual.claudePreviewConfigured,
+      autoInstallable: false,
+      installCommand: null,
+      manualSteps: "Built into Claude Code — available automatically when using Claude Code",
+    },
+  ];
+}
+
+export function installIntegration(id: string, cwd: string): { success: boolean; message: string } {
+  const caps = detectEnvironment(cwd);
+  const integrations = listInstallable(caps);
+  const target = integrations.find((i) => i.id === id);
+
+  if (!target) return { success: false, message: `Unknown integration: ${id}` };
+  if (target.available) return { success: true, message: `${target.name} is already available` };
+  if (!target.autoInstallable || !target.installCommand) {
+    return { success: false, message: `${target.name} requires manual setup: ${target.manualSteps}` };
+  }
+
+  try {
+    execSync(target.installCommand, { stdio: "pipe", timeout: 180_000 });
+    return { success: true, message: `${target.name} installed successfully` };
+  } catch (e) {
+    const err = e instanceof Error ? e.message : String(e);
+    return { success: false, message: `Failed to install ${target.name}: ${err}. Manual: ${target.installCommand}` };
+  }
+}

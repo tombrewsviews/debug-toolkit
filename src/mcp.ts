@@ -31,7 +31,7 @@ import type { PerfSnapshot } from "./session.js";
 import { fitToBudget, estimateTokens } from "./budget.js";
 import { explainTriage, explainConfidence } from "./explain.js";
 import { recordOutcome, getTelemetry, getFixRateForError } from "./telemetry.js";
-import { detectEnvironment, type EnvironmentCapabilities } from "./adapters.js";
+import { detectEnvironment, listInstallable, installIntegration, type EnvironmentCapabilities } from "./adapters.js";
 
 let cwd = process.cwd();
 let envCaps: EnvironmentCapabilities | null = null;
@@ -761,6 +761,54 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
           : "Performance did not improve. Review the metrics and consider a different approach.",
     });
   });
+
+  // ━━━ TOOL: debug_setup ━━━
+  // Check and install integrations
+  server.tool(
+    "debug_setup",
+    "Check available integrations and install missing ones. Call with action 'check' to see status, or 'install' with an integration id to install it.",
+    {
+      action: z.enum(["check", "install"]).describe("check = list status, install = install an integration"),
+      integration: z.string().optional().describe("Integration id to install: lighthouse, chrome"),
+    },
+    async ({ action, integration }) => {
+      const caps = detectEnvironment(cwd);
+
+      if (action === "check") {
+        const integrations = listInstallable(caps);
+        return text({
+          integrations: integrations.map((i) => ({
+            id: i.id,
+            name: i.name,
+            description: i.description,
+            available: i.available,
+            autoInstallable: i.autoInstallable,
+            installCommand: i.installCommand,
+            manualSteps: i.manualSteps,
+          })),
+          summary: {
+            available: integrations.filter((i) => i.available).map((i) => i.name),
+            missing: integrations.filter((i) => !i.available).map((i) => i.name),
+            autoInstallable: integrations.filter((i) => !i.available && i.autoInstallable).map((i) => i.id),
+          },
+        });
+      }
+
+      if (action === "install") {
+        if (!integration) {
+          return text({ error: "Specify which integration to install", available: ["lighthouse", "chrome"] });
+        }
+        const result = installIntegration(integration, cwd);
+        // Refresh capabilities after install
+        if (result.success) {
+          envCaps = detectEnvironment(cwd);
+        }
+        return text(result);
+      }
+
+      return text({ error: "Unknown action. Use 'check' or 'install'." });
+    },
+  );
 
   // ━━━ TOOL 9: debug_session ━━━
   server.registerTool("debug_session", {

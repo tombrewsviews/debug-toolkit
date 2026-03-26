@@ -44,3 +44,17 @@ export declare function detectVisualToolsFromConfig(cwd: string): {
 };
 export declare function detectEnvironment(cwd: string): EnvironmentCapabilities;
 export declare function formatDoctorReport(caps: EnvironmentCapabilities): DoctorCheck[];
+export interface InstallableIntegration {
+    id: string;
+    name: string;
+    description: string;
+    available: boolean;
+    autoInstallable: boolean;
+    installCommand: string | null;
+    manualSteps: string | null;
+}
+export declare function listInstallable(caps: EnvironmentCapabilities): InstallableIntegration[];
+export declare function installIntegration(id: string, cwd: string): {
+    success: boolean;
+    message: string;
+};

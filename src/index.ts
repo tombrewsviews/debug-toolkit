@@ -14,7 +14,7 @@ import { exportPack, importPack } from "./packs.js";
 import { installHook } from "./hook.js";
 import { cleanupFromManifest } from "./cleanup.js";
 import { banner, info, success, warn, error, dim, section, kv, ready, printHelp, sym, c } from "./cli.js";
-import { detectEnvironment, formatDoctorReport, type EnvironmentCapabilities } from "./adapters.js";
+import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration, type EnvironmentCapabilities } from "./adapters.js";
 
 // --- Parse ---
 
@@ -22,7 +22,7 @@ function parseArgs(argv: string[]) {
   const args = argv.slice(2);
   const cmd = args[0] ?? "mcp"; // DEFAULT: pure MCP server (zero-config!)
 
-  if (["clean", "init", "doctor", "demo", "help", "--help", "-h", "mcp", "export", "import"].includes(cmd)) {
+  if (["clean", "init", "install", "doctor", "demo", "help", "--help", "-h", "mcp", "export", "import"].includes(cmd)) {
     return { command: cmd.replace(/^-+/, ""), port: null as number | null, childCommand: [] as string[] };
   }
   if (cmd !== "serve") return { command: "mcp", port: null as number | null, childCommand: [] as string[] };
@@ -446,6 +446,7 @@ async function guidedSetup(cwd: string): Promise<void> {
       { key: "3", label: "Start dev server with capture" },
       { key: "4", label: "Export debug knowledge" },
       { key: "5", label: "Import debug knowledge" },
+      { key: "6", label: "Install optional integrations" },
     ]);
     switch (choice) {
       case "1": doctorCommand(cwd); break;
@@ -453,6 +454,7 @@ async function guidedSetup(cwd: string): Promise<void> {
       case "3": await guidedServe(cwd); break;
       case "4": await guidedExport(cwd); break;
       case "5": await guidedImport(cwd); break;
+      case "6": await installCommand(cwd); break;
     }
     return;
   }
@@ -478,18 +480,28 @@ async function guidedSetup(cwd: string): Promise<void> {
   initCommand(cwd);
 
   // Offer optional installs
-  const caps = detectEnvironment(cwd);
-  if (!caps.perf.lighthouseAvailable) {
+  const capsAfterInit = detectEnvironment(cwd);
+  const missing = listInstallable(capsAfterInit).filter((i) => !i.available);
+  const autoMissing = missing.filter((i) => i.autoInstallable);
+
+  if (autoMissing.length > 0) {
     info("");
-    const installLh = await ask(`  ${c.dim}Install Lighthouse for performance profiling? (y/N): ${c.reset}`);
-    if (installLh.toLowerCase() === "y") {
-      info("Installing lighthouse globally...");
-      try {
-        execSync("npm install -g lighthouse", { stdio: "inherit", timeout: 120_000 });
-        success("Lighthouse installed");
-      } catch {
-        warn("Installation failed — install manually: npm install -g lighthouse");
+    const installAll = await ask(`  ${c.dim}Install optional integrations (${autoMissing.map((i) => i.name).join(", ")})? (y/N): ${c.reset}`);
+    if (installAll.toLowerCase() === "y") {
+      for (const intg of autoMissing) {
+        info(`Installing ${c.bold}${intg.name}${c.reset}...`);
+        const result = installIntegration(intg.id, cwd);
+        if (result.success) success(result.message);
+        else warn(result.message);
       }
+    }
+  }
+
+  const manualOnly = missing.filter((i) => !i.autoInstallable);
+  if (manualOnly.length > 0) {
+    info("");
+    for (const intg of manualOnly) {
+      dim(`  ${intg.name}: ${intg.manualSteps}`);
     }
   }
 }
@@ -534,6 +546,72 @@ async function guidedImport(cwd: string): Promise<void> {
   success(`Imported ${result.imported} entries (${result.total} total in memory)`);
 }
 
+// --- Install ---
+
+async function installCommand(cwd: string): Promise<void> {
+  banner();
+  const caps = detectEnvironment(cwd);
+  const integrations = listInstallable(caps);
+
+  const missing = integrations.filter((i) => !i.available);
+  if (missing.length === 0) {
+    success("All integrations are available!");
+    info("Run 'npx debug-toolkit doctor' for full details.");
+    return;
+  }
+
+  section("AVAILABLE INTEGRATIONS");
+  for (let i = 0; i < missing.length; i++) {
+    const intg = missing[i];
+    const tag = intg.autoInstallable ? c.green + "auto" + c.reset : c.yellow + "manual" + c.reset;
+    info(`  ${c.cyan}${i + 1}${c.reset}) ${c.bold}${intg.name}${c.reset} [${tag}] — ${intg.description}`);
+    if (intg.autoInstallable) {
+      dim(`     ${intg.installCommand}`);
+    } else {
+      dim(`     ${intg.manualSteps}`);
+    }
+  }
+
+  const autoInstallable = missing.filter((i) => i.autoInstallable);
+  if (autoInstallable.length === 0) {
+    info("");
+    info("No auto-installable integrations available. Follow manual steps above.");
+    return;
+  }
+
+  info("");
+  info(`  ${c.cyan}a${c.reset}) Install all auto-installable (${autoInstallable.map((i) => i.name).join(", ")})`);
+
+  const answer = await ask(`\n  ${c.dim}Select (numbers comma-separated, 'a' for all, Enter to skip): ${c.reset}`);
+  if (!answer) { info("Skipped."); return; }
+
+  let toInstall: typeof missing;
+  if (answer.toLowerCase() === "a") {
+    toInstall = autoInstallable;
+  } else {
+    const indices = answer.split(",").map((s) => parseInt(s.trim(), 10) - 1).filter((n) => !isNaN(n));
+    toInstall = indices
+      .map((i) => missing[i])
+      .filter((intg): intg is typeof missing[number] => intg !== undefined && intg.autoInstallable);
+  }
+
+  if (toInstall.length === 0) {
+    info("Nothing to install.");
+    return;
+  }
+
+  info("");
+  for (const intg of toInstall) {
+    info(`Installing ${c.bold}${intg.name}${c.reset}...`);
+    const result = installIntegration(intg.id, cwd);
+    if (result.success) success(result.message);
+    else warn(result.message);
+  }
+
+  info("");
+  info("Run 'npx debug-toolkit doctor' to verify.");
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -553,6 +631,8 @@ async function main(): Promise<void> {
     case "init": initCommand(cwd); break;
 
     case "doctor": doctorCommand(cwd); break;
+
+    case "install": await installCommand(cwd); break;
 
     case "export": {
       const outPath = process.argv[3] ?? join(cwd, ".debug", "knowledge-pack.json");

@@ -92,6 +92,7 @@ export function printHelp(): void {
     ${c.dim}(no args)${c.reset}         guided setup (interactive) or MCP server (non-interactive)
     init              non-interactive setup
     doctor            check environment and optional integrations
+    install           install optional integrations (Lighthouse, Chrome)
     export            export debug memory to a knowledge pack
     import            import a knowledge pack
 
