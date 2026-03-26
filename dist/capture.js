@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { redactSensitiveData } from "./security.js";
 import { newCaptureId, lookupHypothesis, saveSession, } from "./session.js";
@@ -355,5 +355,59 @@ export function getRecentCaptures(session, opts = {}) {
         total: filtered.length,
         showing: recent.length,
     };
+}
+/**
+ * Write live context snapshot to .debug/live-context.json.
+ * Called periodically by the serve process.
+ */
+export function writeLiveContext(cwd) {
+    const recent = peekRecentOutput({ terminalLines: 50, browserLines: 30, buildErrors: 20 });
+    const context = {
+        updatedAt: new Date().toISOString(),
+        terminal: recent.terminal.map((c) => {
+            const d = typeof c.data === "object" && c.data !== null ? c.data : null;
+            return { timestamp: c.timestamp, text: String(d?.text ?? d?.data ?? c.data), stream: String(d?.stream ?? "stdout") };
+        }),
+        browser: recent.browser.map((c) => ({
+            timestamp: c.timestamp, source: c.source, data: c.data,
+        })),
+        buildErrors: recent.buildErrors.map((e) => ({
+            tool: e.tool, file: e.file, line: e.line, code: e.code, message: e.message,
+        })),
+        counts: recent.counts,
+    };
+    const dir = join(cwd, ".debug");
+    if (!existsSync(dir))
+        mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "live-context.json"), JSON.stringify(context));
+}
+/**
+ * Read live context from .debug/live-context.json.
+ * Called by MCP resource handler (separate process from serve).
+ */
+export function readLiveContext(cwd) {
+    const path = join(cwd, ".debug", "live-context.json");
+    if (!existsSync(path))
+        return null;
+    try {
+        const raw = JSON.parse(readFileSync(path, "utf-8"));
+        // Check freshness — if older than 30 seconds, serve might not be running
+        const age = Date.now() - new Date(raw.updatedAt).getTime();
+        if (age > 30_000)
+            return null; // stale
+        return raw;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * Start periodic live context writer. Returns stop function.
+ */
+export function startLiveContextWriter(cwd) {
+    // Write immediately, then every 5 seconds
+    writeLiveContext(cwd);
+    const interval = setInterval(() => writeLiveContext(cwd), 5_000);
+    return { stop: () => clearInterval(interval) };
 }
 //# sourceMappingURL=capture.js.map

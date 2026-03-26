@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import treeKill from "tree-kill";
-import { pipeProcess } from "./capture.js";
+import { pipeProcess, startLiveContextWriter } from "./capture.js";
 import { startProxy, detectPort } from "./proxy.js";
 import { setCwd, startMcpServer } from "./mcp.js";
 import { exportPack, importPack } from "./packs.js";
@@ -850,8 +850,12 @@ async function main(): Promise<void> {
       // Live activity feed — shows MCP tool calls in this terminal
       const activityFeed = startActivityFeed(cwd);
 
+      // Live context writer — writes .debug/live-context.json every 5s for MCP to read
+      const liveContextWriter = startLiveContextWriter(cwd);
+
       const cleanup = () => {
         activityFeed.stop();
+        liveContextWriter.stop();
         if (child.pid) treeKill(child.pid, "SIGTERM");
         proxyHandle?.close();
       };

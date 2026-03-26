@@ -12,11 +12,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { basename, join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createSession, loadSession, saveSession, newHypothesisId, } from "./session.js";
 import { instrumentFile } from "./instrument.js";
 import { cleanupSession } from "./cleanup.js";
-import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBuildErrors, peekRecentOutput } from "./capture.js";
+import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBuildErrors, peekRecentOutput, readLiveContext } from "./capture.js";
 import { investigate, isVisualError } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, memoryStats, maybeArchive } from "./memory.js";
@@ -54,6 +54,128 @@ function loadVisualConfig(cwd) {
 function text(data) {
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
+/**
+ * Build a live status report from all available runtime sources.
+ * Reads from .debug/live-context.json (written by serve process every 5s)
+ * since MCP and serve run in separate processes with separate ring buffers.
+ */
+function buildLiveStatus(cwd) {
+    const sections = [];
+    sections.push("# debug-toolkit — Live Runtime Status\n");
+    // Read from live context file (written by serve process)
+    const live = readLiveContext(cwd);
+    // Also try local ring buffers (if MCP is co-located with serve, e.g. tests)
+    const local = peekRecentOutput({ terminalLines: 50, browserLines: 30, buildErrors: 20 });
+    // Use whichever source has data
+    const hasLive = live !== null;
+    const hasLocal = local.counts.terminal > 0 || local.counts.browser > 0;
+    if (!hasLive && !hasLocal) {
+        sections.push("⚠️ **Dev server not running or not capturing.**\n");
+        sections.push("Start the dev server with capture: `npx debug-toolkit serve -- <your dev command>`\n");
+        sections.push("This enables live terminal, browser console, and build error capture.\n");
+        // Still show Tauri logs and sessions
+        appendTauriLogs(sections, cwd);
+        appendSessions(sections, cwd);
+        return sections.join("\n");
+    }
+    if (hasLive && live) {
+        sections.push(`*Updated: ${live.updatedAt}*\n`);
+        // Terminal errors/warnings
+        const termErrors = live.terminal.filter((t) => /error|warn|panic|failed|crash|exception/i.test(t.text));
+        if (termErrors.length > 0) {
+            sections.push("## Terminal Errors & Warnings\n");
+            sections.push("```");
+            for (const t of termErrors.slice(-20))
+                sections.push(t.text);
+            sections.push("```\n");
+        }
+        // Build errors
+        if (live.buildErrors.length > 0) {
+            sections.push("## Build Errors\n");
+            for (const e of live.buildErrors) {
+                sections.push(`- **${e.tool}** ${e.file}${e.line ? `:${e.line}` : ""} — ${e.message}`);
+            }
+            sections.push("");
+        }
+        // Browser console errors
+        const browserErrors = live.browser.filter((b) => {
+            const d = typeof b.data === "object" && b.data !== null ? b.data : null;
+            return d?.level === "error" || d?.level === "warn" || b.source === "browser-error" || b.source === "browser-network";
+        });
+        if (browserErrors.length > 0) {
+            sections.push("## Browser Console\n");
+            sections.push("```");
+            for (const b of browserErrors.slice(-15)) {
+                const d = typeof b.data === "object" && b.data !== null ? b.data : null;
+                if (d?.args) {
+                    sections.push(`[${d.level ?? b.source}] ${d.args.join(" ")}`);
+                }
+                else if (d?.url) {
+                    sections.push(`[network] ${d.method ?? "GET"} ${d.url} → ${d.status ?? d.error}`);
+                }
+                else if (d?.message) {
+                    sections.push(`[${d.type ?? "error"}] ${d.message}`);
+                }
+                else {
+                    sections.push(JSON.stringify(d ?? b.data));
+                }
+            }
+            sections.push("```\n");
+        }
+        // Capture status
+        sections.push("## Capture Status\n");
+        sections.push(`- Terminal: ${live.counts.terminal} lines | Browser: ${live.counts.browser} events | Build errors: ${live.counts.buildErrors}`);
+        sections.push("");
+        // Count issues
+        const totalIssues = termErrors.length + live.buildErrors.length + browserErrors.length;
+        if (totalIssues > 0) {
+            sections.push(`**${totalIssues} issue(s) detected.** Call \`debug_investigate\` to analyze.\n`);
+        }
+        else {
+            sections.push("**No errors detected.** App running cleanly.\n");
+        }
+    }
+    appendTauriLogs(sections, cwd);
+    appendSessions(sections, cwd);
+    return sections.join("\n");
+}
+function appendTauriLogs(sections, cwd) {
+    const tauriLogs = readTauriLogs(cwd, 20);
+    const logErrors = tauriLogs.filter((c) => {
+        const d = typeof c.data === "object" && c.data !== null ? c.data : null;
+        return /error|warn|panic/i.test(typeof d?.text === "string" ? d.text : "");
+    });
+    if (logErrors.length > 0) {
+        sections.push("## Tauri Logs\n");
+        sections.push("```");
+        for (const c of logErrors) {
+            const d = typeof c.data === "object" && c.data !== null ? c.data : null;
+            sections.push(typeof d?.text === "string" ? d.text : JSON.stringify(d));
+        }
+        sections.push("```\n");
+    }
+}
+function appendSessions(sections, cwd) {
+    const sessionsDir = join(cwd, ".debug", "sessions");
+    if (!existsSync(sessionsDir))
+        return;
+    try {
+        const files = readdirSync(sessionsDir).filter((f) => f.endsWith(".json")).sort().reverse().slice(0, 3);
+        if (files.length > 0) {
+            sections.push("## Recent Debug Sessions\n");
+            for (const f of files) {
+                try {
+                    const session = JSON.parse(readFileSync(join(sessionsDir, f), "utf-8"));
+                    const status = session.verifiedAt ? "verified" : session.diagnosis ? "diagnosed" : "active";
+                    sections.push(`- **${session.id}** [${status}] — ${session.problem?.slice(0, 80) ?? "unknown"}`);
+                }
+                catch { }
+            }
+            sections.push("");
+        }
+    }
+    catch { }
+}
 export function createMcpServer() {
     const server = new McpServer({ name: "debug-toolkit", version: getPackageVersion() }, { capabilities: { tools: {}, resources: {} } });
     // ━━━ RESOURCE: debug_methodology ━━━
@@ -64,6 +186,18 @@ export function createMcpServer() {
     }, async () => ({
         contents: [{ uri: "debug://methodology", mimeType: "text/markdown", text: METHODOLOGY }],
     }));
+    // ━━━ RESOURCE: debug_status ━━━
+    // Live runtime context — pre-processed and ready for the agent.
+    // Agent reads this BEFORE investigating to see what's happening right now.
+    server.registerResource("debug_status", "debug://status", {
+        description: "Live runtime status — terminal errors, browser console, build errors, and active sessions. READ THIS FIRST when debugging.",
+        mimeType: "text/markdown",
+    }, async () => {
+        const status = buildLiveStatus(cwd);
+        return {
+            contents: [{ uri: "debug://status", mimeType: "text/markdown", text: status }],
+        };
+    });
     // ━━━ TOOL 1: debug_investigate ━━━
     // The killer feature. One call: error in, full context out.
     server.registerTool("debug_investigate", {

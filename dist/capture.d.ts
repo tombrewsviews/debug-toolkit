@@ -78,4 +78,45 @@ export declare function getRecentCaptures(session: DebugSession, opts?: {
     total: number;
     showing: number;
 };
+export interface LiveContext {
+    updatedAt: string;
+    terminal: Array<{
+        timestamp: string;
+        text: string;
+        stream: string;
+    }>;
+    browser: Array<{
+        timestamp: string;
+        source: string;
+        data: unknown;
+    }>;
+    buildErrors: Array<{
+        tool: string;
+        file: string | null;
+        line: number | null;
+        code: string | null;
+        message: string;
+    }>;
+    counts: {
+        terminal: number;
+        browser: number;
+        buildErrors: number;
+    };
+}
+/**
+ * Write live context snapshot to .debug/live-context.json.
+ * Called periodically by the serve process.
+ */
+export declare function writeLiveContext(cwd: string): void;
+/**
+ * Read live context from .debug/live-context.json.
+ * Called by MCP resource handler (separate process from serve).
+ */
+export declare function readLiveContext(cwd: string): LiveContext | null;
+/**
+ * Start periodic live context writer. Returns stop function.
+ */
+export declare function startLiveContextWriter(cwd: string): {
+    stop: () => void;
+};
 export {};
