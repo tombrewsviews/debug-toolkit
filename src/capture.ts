@@ -183,6 +183,54 @@ export function peekRecentOutput(opts: { terminalLines?: number; browserLines?: 
 }
 
 /**
+ * Block until new output arrives in the ring buffers, or timeout.
+ * Polls every 1s. Returns new items that appeared since the call started.
+ */
+export function waitForNewOutput(opts: {
+  timeoutMs?: number;
+  minLines?: number;
+  source?: Capture["source"];
+} = {}): Promise<{ items: Capture[]; timedOut: boolean; waitedMs: number }> {
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const minLines = opts.minLines ?? 1;
+  const startTermLen = terminalBuffer.length;
+  const startBrowserLen = browserBuffer.length;
+  const startTime = Date.now();
+
+  return new Promise((resolve) => {
+    const check = () => {
+      const elapsed = Date.now() - startTime;
+
+      // Count new items by comparing buffer lengths
+      const newTerminal = terminalBuffer.length - startTermLen;
+      const newBrowser = browserBuffer.length - startBrowserLen;
+      const totalNew = opts.source
+        ? (opts.source.startsWith("browser") ? newBrowser : newTerminal)
+        : newTerminal + newBrowser;
+
+      if (totalNew >= minLines) {
+        // Peek only the new items
+        const terminal = opts.source?.startsWith("browser") ? [] : terminalBuffer.peek(Math.max(0, newTerminal));
+        const browser = opts.source === "terminal" ? [] : browserBuffer.peek(Math.max(0, newBrowser));
+        const items = [...terminal, ...browser].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+        resolve({ items, timedOut: false, waitedMs: elapsed });
+        return;
+      }
+
+      if (elapsed >= timeoutMs) {
+        resolve({ items: [], timedOut: true, waitedMs: elapsed });
+        return;
+      }
+
+      setTimeout(check, 1000);
+    };
+
+    // First check after 1s (don't return immediately)
+    setTimeout(check, 1000);
+  });
+}
+
+/**
  * Drain all accumulated build errors from the buffer.
  */
 export function drainBuildErrors(): BuildError[] {
@@ -261,14 +309,23 @@ export function runAndCapture(command: string, timeoutMs = 30_000): Promise<Capt
   });
 }
 
+// --- Lighthouse flag (for tagging browser events triggered by Lighthouse) ---
+
+let lighthouseRunning = false;
+export function setLighthouseRunning(running: boolean): void { lighthouseRunning = running; }
+
 // --- Browser event handler ---
 
-export function onBrowserEvent(event: { type: string; data: unknown; ts: number }): void {
+export function onBrowserEvent(event: { type: string; data: unknown; ts: number }, context?: "webview" | "external"): void {
   const srcMap: Record<string, Capture["source"]> = {
     console: "browser-console", network: "browser-network", error: "browser-error",
   };
   const src = srcMap[event.type] ?? "browser-console";
   const str = typeof event.data === "object" ? JSON.stringify(event.data) : String(event.data);
+
+  const sourceContext: Capture["sourceContext"] = lighthouseRunning
+    ? "lighthouse"
+    : (context ?? "webview");
 
   browserBuffer.push({
     id: newCaptureId(),
@@ -277,6 +334,8 @@ export function onBrowserEvent(event: { type: string; data: unknown; ts: number 
     markerTag: extractMarkerTag(str),
     data: event.data,
     hypothesisId: null,
+    lighthouseTriggered: lighthouseRunning || undefined,
+    sourceContext,
   });
 }
 
@@ -415,7 +474,7 @@ export function getRecentCaptures(
 export interface LiveContext {
   updatedAt: string;
   terminal: Array<{ timestamp: string; text: string; stream: string }>;
-  browser: Array<{ timestamp: string; source: string; data: unknown }>;
+  browser: Array<{ timestamp: string; source: string; data: unknown; lighthouseTriggered?: boolean; sourceContext?: "webview" | "external" | "lighthouse" }>;
   buildErrors: Array<{ tool: string; file: string | null; line: number | null; code: string | null; message: string }>;
   counts: { terminal: number; browser: number; buildErrors: number };
 }
@@ -435,6 +494,8 @@ export function writeLiveContext(cwd: string): void {
     }),
     browser: recent.browser.map((c) => ({
       timestamp: c.timestamp, source: c.source, data: c.data,
+      lighthouseTriggered: c.lighthouseTriggered || undefined,
+      sourceContext: c.sourceContext || undefined,
     })),
     buildErrors: recent.buildErrors.map((e) => ({
       tool: e.tool, file: e.file, line: e.line, code: e.code, message: e.message,

@@ -43,6 +43,99 @@ function parseArgs(argv) {
     }
     return { command: "serve", port, childCommand: child };
 }
+// --- /debug-all Command Template ---
+const DEBUG_ALL_COMMAND = `---
+description: Full diagnostic playbook for debug-toolkit — run ALL signals in parallel for maximum coverage
+---
+
+# debug-toolkit — Full Diagnostic Playbook
+
+Use this when debugging any bug, error, or unexpected behavior. This runs ALL diagnostic tools in parallel for maximum signal coverage, instead of just reading debug://status and guessing.
+
+## Phase 1: Blast (parallel signal collection)
+
+Run ALL of these in parallel — do not wait for one before starting the next:
+
+1. **Read \`debug://status\`** — live situation report (terminal, browser, build, TypeScript errors)
+2. **Call \`debug_perf\`** — Lighthouse performance snapshot (also triggers browser errors as a side effect)
+3. **Call \`debug_visual\`** — screenshot + DOM state (requires Ghost OS)
+4. **Call \`debug_capture\`** — drain any buffered runtime events
+
+\`\`\`
+# All four in one parallel batch:
+Read debug://status
+debug_perf({ sessionId, url: "http://localhost:1420", phase: "before" })
+debug_visual({ sessionId, action: "screenshot" })
+debug_capture({ sessionId })
+\`\`\`
+
+## Phase 2: Analyze (cross-reference signals)
+
+Read all four results and look for:
+- **Errors in multiple signals** — these are the real bugs (e.g., terminal error + browser error = confirmed issue)
+- **Errors ONLY in tsc output** — likely pre-existing warnings (dead code, unused imports), not runtime issues
+- **Errors ONLY during Lighthouse** — tagged as "Lighthouse-triggered" in status; may not reproduce normally but still indicate real code issues
+- **New errors vs pre-existing** — compare timestamps; warnings present since app startup are likely noise
+
+### Noise filtering
+- \`warning: function X is never used\` → dead code, not a bug
+- \`warning: unused variable\` → pre-existing, skip unless it correlates with a runtime failure
+- Focus on: type mismatches, null access, network failures, render errors
+
+## Phase 3: Investigate (deep dive)
+
+For each distinct error found in Phase 1:
+
+\`\`\`
+debug_investigate({ error: "<specific error text>", files: ["suspect-file.tsx"] })
+\`\`\`
+
+- If \`proactiveSuggestion\` returns with >80% confidence → apply directly
+- If \`triage: "trivial"\` → apply \`fixHint\` directly
+- If past solutions found → check \`stale\` field before trusting
+
+## Phase 4: Fix & Verify
+
+\`\`\`
+# Apply the fix, then:
+debug_verify({ sessionId, command: "npm run build" })
+
+# If performance was an issue:
+debug_perf({ sessionId, url: "http://localhost:1420", phase: "after" })
+\`\`\`
+
+## Phase 5: Cleanup
+
+\`\`\`
+debug_cleanup({ sessionId, diagnosis: "one-line root cause", rootCause: { trigger, errorFile, causeFile, fixDescription } })
+\`\`\`
+
+---
+
+## Important: Lighthouse in Tauri/Electron Apps
+
+Lighthouse runs in headless Chrome, which does NOT have \`window.__TAURI__\` or Electron's \`contextBridge\`. This means:
+- **Performance metrics are UNRELIABLE** — they measure headless Chrome, not your actual webview
+- **Browser errors ARE still valuable** — Lighthouse loading the page can trigger real code-path errors (missing APIs, failed network calls, rendering issues)
+- The toolkit will warn you when a non-browser framework is detected
+
+## Important: Ghost OS for Visual Debugging
+
+- If \`debug_visual\` returns an error about Ghost OS not being connected, **skip visual capture** — do not retry repeatedly
+- Note the gap in your investigation ("visual state unknown — Ghost OS not available")
+- Consider using \`debug_perf\` as an alternative signal source (it loads the page and can trigger visible errors)
+
+## Monitoring Long-Running Processes
+
+For ML pipelines, build processes, or intermittent bugs:
+1. Read \`debug://status\` → note the current state
+2. Wait for the process to progress
+3. Read \`debug://status\` again → look for CHANGES between reads
+4. Use \`debug_capture\` to drain any new buffered events
+5. Repeat until the process completes or the bug manifests
+
+The status report is a snapshot, not a live stream. You must poll it to see changes.
+`;
 // --- Init ---
 function initCommand(cwd) {
     banner();
@@ -275,9 +368,28 @@ Returns: 50-line source context, TypeScript errors, git diff content, terminal o
 debug_verify({ sessionId, command: "npm run build" })
 \`\`\`
 
+## Tool decision tree — pick the right tool for the signal
+
+| Signal needed | Tool | When to use |
+|---|---|---|
+| Runtime errors, app state | \`debug://status\` | Always first |
+| Deep error analysis | \`debug_investigate\` | Stack traces, error messages |
+| Performance metrics | \`debug_perf\` | "slow", "laggy", load time issues |
+| Visual/layout state | \`debug_visual\` | "overlap", "misaligned", layout bugs |
+| Long-running output | \`debug_capture\` with \`wait: true\` | Async ops, build processes, generation tasks |
+| Past solutions | \`debug_recall\` | Recurring errors, "this happened before" |
+
+For performance bugs: \`debug_perf\` first, then investigate errors it triggers.
+For visual bugs: \`debug_visual\` screenshot first, then investigate with file context.
+For async/long-running: \`debug_capture\` with \`wait: true\` to block until output arrives.
+
 ## Triggers — use toolkit when user says:
 
 bug, error, issue, crash, panic, broken, fails, fix, debug, investigate, review errors, check the app, what's wrong, doesn't work, overlap, misaligned, layout, visual, slow, laggy, performance, test failure
+
+## Full Diagnostic Sweep
+
+For complex bugs or when initial investigation is inconclusive, use \`/debug-all\` — runs all diagnostic tools in parallel (status + perf + visual + capture) for maximum signal coverage.
 
 ## SKIP ONLY for:
 - New features with no existing bug
@@ -291,6 +403,13 @@ bug, error, issue, crash, panic, broken, fails, fix, debug, investigate, review 
     updateSkillMd(cwd);
     const skillPath = join(cwd, ".claude", "skills", "debug-toolkit", "SKILL.md");
     success(`Skill installed ${sym.arrow} ${skillPath}`);
+    // Install /debug-all command — Claude Code discovers commands from .claude/commands/
+    const commandsDir = join(cwd, ".claude", "commands");
+    if (!existsSync(commandsDir))
+        mkdirSync(commandsDir, { recursive: true });
+    const commandPath = join(commandsDir, "debug-all.md");
+    writeFileSync(commandPath, DEBUG_ALL_COMMAND);
+    success(`Command installed ${sym.arrow} ${commandPath}`);
     if (isTauri) {
         section("TAURI SUPPORT");
         info(`${c.green}${sym.check}${c.reset} Rust stack trace parsing (panics + backtraces)`);
@@ -521,8 +640,12 @@ async function guidedSetup(cwd) {
     const mcpExists = existsSync(join(cwd, ".mcp.json")) || existsSync(join(cwd, ".claude", "mcp.json"));
     if (mcpExists) {
         success(`Already set up in this project. Ready to use in Claude Code.\n`);
-        // Silently update SKILL.md on every run (picks up new activation rules from package updates)
+        // Silently update SKILL.md and command on every run (picks up new content from package updates)
         updateSkillMd(cwd);
+        const commandsDir = join(cwd, ".claude", "commands");
+        if (!existsSync(commandsDir))
+            mkdirSync(commandsDir, { recursive: true });
+        writeFileSync(join(commandsDir, "debug-all.md"), DEBUG_ALL_COMMAND);
         // Auto-install missing integrations on every run
         await autoInstallMissing(cwd);
         await mainMenu(cwd);

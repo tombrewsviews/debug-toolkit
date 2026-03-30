@@ -44,16 +44,30 @@ export declare function peekRecentOutput(opts?: {
     };
 };
 /**
+ * Block until new output arrives in the ring buffers, or timeout.
+ * Polls every 1s. Returns new items that appeared since the call started.
+ */
+export declare function waitForNewOutput(opts?: {
+    timeoutMs?: number;
+    minLines?: number;
+    source?: Capture["source"];
+}): Promise<{
+    items: Capture[];
+    timedOut: boolean;
+    waitedMs: number;
+}>;
+/**
  * Drain all accumulated build errors from the buffer.
  */
 export declare function drainBuildErrors(): BuildError[];
 export declare function pipeProcess(child: ChildProcess): void;
 export declare function runAndCapture(command: string, timeoutMs?: number): Promise<Capture[]>;
+export declare function setLighthouseRunning(running: boolean): void;
 export declare function onBrowserEvent(event: {
     type: string;
     data: unknown;
     ts: number;
-}): void;
+}, context?: "webview" | "external"): void;
 export declare function drainCaptures(cwd: string, session: DebugSession): Capture[];
 /**
  * Discover Tauri log files for a project.
@@ -89,6 +103,8 @@ export interface LiveContext {
         timestamp: string;
         source: string;
         data: unknown;
+        lighthouseTriggered?: boolean;
+        sourceContext?: "webview" | "external" | "lighthouse";
     }>;
     buildErrors: Array<{
         tool: string;

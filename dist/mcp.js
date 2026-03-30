@@ -17,19 +17,19 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createSession, loadSession, saveSession, newHypothesisId, } from "./session.js";
 import { instrumentFile } from "./instrument.js";
 import { cleanupSession } from "./cleanup.js";
-import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBuildErrors, peekRecentOutput, readLiveContext } from "./capture.js";
+import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBuildErrors, peekRecentOutput, readLiveContext, setLighthouseRunning, waitForNewOutput } from "./capture.js";
 import { investigate, isVisualError } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, memoryStats, maybeArchive } from "./memory.js";
 import { triageError } from "./triage.js";
 import { generateSuggestions } from "./suggestions.js";
 import { METHODOLOGY } from "./methodology.js";
-import { runLighthouse, compareSnapshots } from "./perf.js";
+import { runLighthouse, compareSnapshots, detectAppFramework, getAlternativePerfAdvice } from "./perf.js";
 import { fitToBudget } from "./budget.js";
 import { explainTriage, explainConfidence } from "./explain.js";
 import { recordOutcome, getTelemetry, getFixRateForError } from "./telemetry.js";
 import { detectEnvironment, listInstallable, installIntegration } from "./adapters.js";
-import { connectToGhostOs, disconnectGhostOs, isGhostConnected, resetConnectionState, takeScreenshot, readScreen, findElements, annotateScreen, } from "./ghost-bridge.js";
+import { connectToGhostOs, disconnectGhostOs, isGhostConnected, resetConnectionState, takeScreenshot, readScreen, findElements, annotateScreen, getVisualDiagnostic, } from "./ghost-bridge.js";
 import { saveScreenshot, getPackageVersion } from "./utils.js";
 import { enableActivityWriter, logActivity } from "./activity.js";
 let cwd = process.cwd();
@@ -165,20 +165,55 @@ function buildLiveStatus(cwd) {
         }
         // === FULL BROWSER CONSOLE (unfiltered — agent needs ALL logs) ===
         if (live.browser.length > 0) {
-            const errors = live.browser.filter((b) => {
+            const isError = (b) => {
                 const d = typeof b.data === "object" && b.data !== null ? b.data : null;
                 return d?.level === "error" || d?.level === "warn" || b.source === "browser-error" || b.source === "browser-network";
-            });
-            const logs = live.browser.filter((b) => {
-                const d = typeof b.data === "object" && b.data !== null ? b.data : null;
-                return d?.level !== "error" && d?.level !== "warn" && b.source !== "browser-error" && b.source !== "browser-network";
-            });
+            };
+            const errors = live.browser.filter(isError);
+            const logs = live.browser.filter((b) => !isError(b));
+            // Split errors by source context: webview vs external vs Lighthouse
+            const contexts = new Set(errors.map((b) => b.sourceContext ?? (b.lighthouseTriggered ? "lighthouse" : "webview")));
+            const hasMultipleSources = contexts.size > 1;
             if (errors.length > 0) {
-                sections.push("## Browser Errors & Warnings\n");
-                sections.push("```");
-                for (const b of errors.slice(-30))
-                    sections.push(formatBrowserEvent(b));
-                sections.push("```\n");
+                if (hasMultipleSources) {
+                    const webviewErrors = errors.filter((b) => (b.sourceContext ?? (b.lighthouseTriggered ? "lighthouse" : "webview")) === "webview");
+                    const externalErrors = errors.filter((b) => b.sourceContext === "external");
+                    const lighthouseErrors = errors.filter((b) => (b.sourceContext === "lighthouse") || (!b.sourceContext && b.lighthouseTriggered));
+                    if (webviewErrors.length > 0) {
+                        sections.push("## Browser Errors & Warnings (webview)\n");
+                        sections.push("```");
+                        for (const b of webviewErrors.slice(-30))
+                            sections.push(formatBrowserEvent(b));
+                        sections.push("```\n");
+                    }
+                    if (externalErrors.length > 0) {
+                        sections.push("## Browser Errors & Warnings (external Chrome)\n");
+                        sections.push("*These errors came from an external Chrome instance, not the app's webview.*\n");
+                        sections.push("```");
+                        for (const b of externalErrors.slice(-30))
+                            sections.push(formatBrowserEvent(b));
+                        sections.push("```\n");
+                    }
+                    if (lighthouseErrors.length > 0) {
+                        sections.push("## Browser Errors & Warnings (Lighthouse-triggered)\n");
+                        sections.push("*These errors were triggered by Lighthouse loading the page in headless Chrome, not by normal app usage. They may still indicate real code issues.*\n");
+                        sections.push("```");
+                        for (const b of lighthouseErrors.slice(-30))
+                            sections.push(formatBrowserEvent(b));
+                        sections.push("```\n");
+                    }
+                }
+                else {
+                    const label = contexts.has("lighthouse") ? " (Lighthouse-triggered)" : contexts.has("external") ? " (external Chrome)" : "";
+                    sections.push(`## Browser Errors & Warnings${label}\n`);
+                    if (contexts.has("lighthouse")) {
+                        sections.push("*These errors were triggered by Lighthouse loading the page in headless Chrome, not by normal app usage. They may still indicate real code issues.*\n");
+                    }
+                    sections.push("```");
+                    for (const b of errors.slice(-30))
+                        sections.push(formatBrowserEvent(b));
+                    sections.push("```\n");
+                }
             }
             if (logs.length > 0) {
                 sections.push("## Browser Console (app logs)\n");
@@ -226,8 +261,27 @@ function buildLiveStatus(cwd) {
         }
     }
     appendTauriLogs(sections, cwd);
+    appendVisualStatus(sections);
     appendSessions(sections, cwd);
     return sections.join("\n");
+}
+function appendVisualStatus(sections) {
+    const diag = getVisualDiagnostic();
+    sections.push("## Visual Debugging\n");
+    if (diag.connected) {
+        sections.push(`- Ghost OS: **connected**${diag.lastSuccessAgo ? ` (last capture ${diag.lastSuccessAgo})` : ""}`);
+    }
+    else if (diag.binaryFound) {
+        sections.push(`- Ghost OS: **not connected** (binary found at ${diag.binaryPath})`);
+        if (diag.lastError)
+            sections.push(`- Last error: ${diag.lastError}`);
+        sections.push("- Try: `debug_setup action='connect'`");
+    }
+    else {
+        sections.push("- Ghost OS: **not installed**");
+        sections.push("- For visual debugging: `debug_setup action='install' integration='ghost-os'`");
+    }
+    sections.push("");
 }
 function appendTauriLogs(sections, cwd) {
     const tauriLogs = readTauriLogs(cwd, 20);
@@ -551,7 +605,14 @@ Start every debugging session with this tool.`,
                         };
                     }
                 }
-                catch { /* visual capture failed — non-fatal */ }
+                catch (e) {
+                    response.visualDiagnostic = {
+                        failed: true,
+                        reason: e instanceof Error ? e.message : String(e),
+                        ...getVisualDiagnostic(),
+                        suggestion: "Visual capture failed. Check debug_setup for Ghost OS status.",
+                    };
+                }
             }
             // Always include visual hint (whether or not we captured)
             const tools = [];
@@ -576,6 +637,10 @@ Start every debugging session with this tool.`,
             if (typeof response.nextStep === "string") {
                 response.nextStep += " (Visual bug detected — screenshot recommended.)";
             }
+        }
+        // Hint when no source code could be extracted
+        if (result.sourceCode.length === 0 && result.frames.length === 0 && (!hintFiles || hintFiles.length === 0)) {
+            response.noSourceCodeHint = "No source code could be extracted from the description. For better results, pass file paths in the 'files' parameter. Example: { error: \"description\", files: [\"src/MyComponent.tsx\"] }";
         }
         // Add triage explanation
         const userFrameCount = result.frames.filter((f) => f.isUserCode).length;
@@ -638,9 +703,10 @@ Supports JS/TS/Python/Go.`,
     // ━━━ TOOL 3: debug_capture ━━━
     server.registerTool("debug_capture", {
         title: "Capture Runtime Output",
-        description: `Collect runtime output. Two modes:
+        description: `Collect runtime output. Three modes:
 1. Run a command and capture its output (e.g., 'npm test', 'curl localhost:3000')
 2. Drain buffered terminal/browser output from the dev server
+3. Wait for new output (wait=true) — blocks until new lines arrive or timeout
 
 Returns tagged captures linked to hypotheses, plus any errors detected.
 Results are paginated — only the most recent captures are returned.`,
@@ -648,15 +714,53 @@ Results are paginated — only the most recent captures are returned.`,
             sessionId: z.string(),
             command: z.string().optional().describe("Command to run (e.g., 'npm test')"),
             limit: z.number().optional().describe("Max results (default 30)"),
+            wait: z.boolean().optional().describe("Block until new output arrives (up to waitTimeoutMs). Use for long-running processes."),
+            waitTimeoutMs: z.number().optional().describe("Max ms to wait for new output (default 30000, max 60000)"),
         },
-    }, async ({ sessionId, command, limit }) => {
+    }, async ({ sessionId, command, limit, wait, waitTimeoutMs }) => {
         const session = loadSession(cwd, sessionId);
+        // Mode 3: Wait for new output (blocking poll)
+        if (wait && !command) {
+            const maxWait = Math.min(waitTimeoutMs ?? 30_000, 60_000);
+            const result = await waitForNewOutput({ timeoutMs: maxWait, minLines: 1 });
+            if (result.timedOut) {
+                logActivity({ tool: "debug_capture", ts: Date.now(), summary: `waited ${Math.round(result.waitedMs / 1000)}s (timed out)`, metrics: { total: 0 } });
+                return text({
+                    waited: true,
+                    waitedMs: result.waitedMs,
+                    timedOut: true,
+                    total: 0,
+                    nextStep: `No new output in ${Math.round(result.waitedMs / 1000)}s. The process may be idle or complete. Try running a command or check debug://status.`,
+                });
+            }
+            // Add waited items to session
+            session.captures.push(...result.items);
+            saveSession(cwd, session);
+            const errors = result.items.filter((c) => {
+                const d = c.data;
+                return d?.stream === "stderr" || d?.text?.toLowerCase().includes("error");
+            });
+            logActivity({ tool: "debug_capture", ts: Date.now(), summary: `waited ${Math.round(result.waitedMs / 1000)}s, got ${result.items.length} lines`, metrics: { total: result.items.length, errors: errors.length } });
+            return text({
+                waited: true,
+                waitedMs: result.waitedMs,
+                timedOut: false,
+                total: result.items.length,
+                output: result.items.slice(0, 30).map((c) => ({ source: c.source, data: c.data })),
+                errors: errors.slice(0, 10).map((c) => c.data?.text),
+                nextStep: errors.length > 0
+                    ? "New errors arrived. Use debug_investigate with the error text for full context."
+                    : `${result.items.length} new line(s) captured. Review output or wait again for more.`,
+            });
+        }
+        // Mode 1: Run command
         if (command) {
             const safe = validateCommand(command);
             const caps = await runAndCapture(safe, 30_000);
             session.captures.push(...caps);
             saveSession(cwd, session);
         }
+        // Mode 2: Drain buffers
         drainCaptures(cwd, session);
         // Also drain Tauri log files if this is a Tauri project
         const tauriLogs = readTauriLogs(cwd, 30);
@@ -690,7 +794,7 @@ Results are paginated — only the most recent captures are returned.`,
                 : tagged.length > 0
                     ? "Instrumented output captured. Review tagged data to confirm/reject hypotheses."
                     : recent.total === 0 && !command
-                        ? "No output captured. Ask the user to run their app, then call debug_capture with a command like 'npm test' or 'curl localhost:3000' to collect output."
+                        ? "No output captured. Try debug_capture with wait=true to block until output arrives, or run a command like 'npm test'."
                         : "No tagged output yet. Make sure the instrumented code path is executed.",
         });
     });
@@ -1036,7 +1140,10 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
         }
         const session = loadSession(cwd, sessionId);
         const snapshotPhase = phase ?? "before";
+        const frameworkInfo = detectAppFramework(cwd);
+        setLighthouseRunning(true);
         const metrics = await runLighthouse(url);
+        setLighthouseRunning(false);
         if (!metrics) {
             return text({
                 error: "Lighthouse failed — Chrome may not be installed or the URL is unreachable.",
@@ -1068,14 +1175,26 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
                 };
             }
         }
+        // Check for browser errors triggered during the audit
+        const postAuditBrowser = peekRecentOutput({ browserLines: 50 });
+        const auditTriggeredErrors = postAuditBrowser.browser.filter((c) => c.lighthouseTriggered || c.sourceContext === "lighthouse").length;
         logActivity({
             tool: "debug_perf", ts: Date.now(),
             summary: `${snapshotPhase} snapshot for ${url}`,
             metrics: { lcp: metrics.lcp !== null ? `${Math.round(metrics.lcp)}ms` : "n/a", cls: metrics.cls !== null ? metrics.cls.toFixed(3) : "n/a", ...(comparison ? { improved: comparison.improved ? "yes" : "no" } : {}) },
         });
+        const isDesktopApp = frameworkInfo.framework === "tauri" || frameworkInfo.framework === "electron";
         return text({
             phase: snapshotPhase,
             url,
+            framework: frameworkInfo.framework ?? undefined,
+            frameworkWarning: frameworkInfo.warning ?? undefined,
+            metricsReliability: isDesktopApp ? "low" : "normal",
+            ...(isDesktopApp ? {
+                alternativeAdvice: getAlternativePerfAdvice(frameworkInfo.framework),
+                valuableSignals: "Browser errors triggered during this audit reflect real code issues. Check debug://status for new errors.",
+            } : {}),
+            errorsTriggeredByAudit: auditTriggeredErrors > 0 ? auditTriggeredErrors : undefined,
             metrics: {
                 lcp: metrics.lcp !== null ? `${Math.round(metrics.lcp)}ms` : null,
                 cls: metrics.cls !== null ? metrics.cls.toFixed(3) : null,
@@ -1085,7 +1204,9 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
             },
             comparison,
             nextStep: snapshotPhase === "before"
-                ? "Apply your fix, then call debug_perf again with phase='after' to compare."
+                ? isDesktopApp
+                    ? `Metrics have low reliability for ${frameworkInfo.framework} apps. ${auditTriggeredErrors > 0 ? `${auditTriggeredErrors} browser error(s) triggered during audit — check debug://status.` : ""} Apply your fix, then call debug_perf again with phase='after' for relative comparison.`
+                    : "Apply your fix, then call debug_perf again with phase='after' to compare."
                 : comparison?.improved
                     ? "Performance improved! Proceed with debug_verify to confirm the fix."
                     : "Performance did not improve. Review the metrics and consider a different approach.",

@@ -5,6 +5,34 @@
  * and compares before/after snapshots for regression detection.
  */
 import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+/**
+ * Detect if the project uses Tauri or Electron.
+ * Returns a warning about Lighthouse accuracy when running outside a native webview.
+ */
+export function detectAppFramework(cwd) {
+    // Check Tauri: src-tauri/tauri.conf.json or src-tauri/Cargo.toml
+    if (existsSync(join(cwd, "src-tauri", "tauri.conf.json")) ||
+        existsSync(join(cwd, "src-tauri", "Cargo.toml"))) {
+        return {
+            framework: "tauri",
+            warning: "Lighthouse runs in headless Chrome without window.__TAURI__. Metrics may not reflect actual webview performance. Browser errors triggered by Lighthouse ARE still valuable for finding runtime issues.",
+        };
+    }
+    // Check Electron: electron in package.json dependencies
+    try {
+        const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf-8"));
+        if (pkg.dependencies?.electron || pkg.devDependencies?.electron) {
+            return {
+                framework: "electron",
+                warning: "Lighthouse runs in headless Chrome, not your Electron renderer. Metrics may differ from actual app performance. Browser errors triggered during audit ARE still useful.",
+            };
+        }
+    }
+    catch { }
+    return { framework: null, warning: null };
+}
 /**
  * Extract Web Vitals from Lighthouse JSON output.
  */
@@ -45,6 +73,15 @@ export function compareSnapshots(before, after) {
         speedIndex: diff(before.speedIndex, after.speedIndex),
         improved,
     };
+}
+/**
+ * Framework-specific performance advice when Lighthouse metrics are unreliable.
+ */
+export function getAlternativePerfAdvice(framework) {
+    if (framework === "tauri") {
+        return "For accurate Tauri webview metrics, use the WebView DevTools Performance tab (right-click → Inspect Element in the app window). Lighthouse browser errors triggered during this audit ARE still valuable for finding runtime issues.";
+    }
+    return "For accurate Electron metrics, use --enable-logging and the DevTools Performance panel in the renderer process. Lighthouse browser errors triggered during this audit ARE still valuable for finding runtime issues.";
 }
 /**
  * Run Lighthouse against a URL and return extracted metrics.

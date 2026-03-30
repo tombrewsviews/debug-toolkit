@@ -84,7 +84,7 @@ The agent never needs to call Ghost OS tools directly. Visual capture is automat
 
 Options: `"auto"` (default — captures on visual bugs), `"manual"` (agent-triggered via `debug_visual`), `"off"`.
 
-Without Ghost OS, all visual features gracefully fall back to advisory hints.
+Without Ghost OS, all visual features gracefully fall back to advisory hints. The `debug://status` report includes a **Visual Debugging** section showing connection state, last error, and setup instructions — so the agent always knows why visual capture isn't working instead of failing silently.
 
 ### Installing Integrations
 
@@ -133,8 +133,9 @@ dbg doctor
 
 The MCP server detects available integrations at startup and connects to Ghost OS if available. Tool behavior adapts:
 
-- **Visual bugs:** If Ghost OS is connected, `debug_investigate` auto-captures screenshots and DOM state. If not, it suggests manual tools or shows setup guidance.
-- **Performance:** If Lighthouse isn't installed, `debug_perf` returns setup instructions immediately instead of failing after a 60-second timeout.
+- **Visual bugs:** If Ghost OS is connected, `debug_investigate` auto-captures screenshots and DOM state. If not, it suggests manual tools or shows setup guidance. If capture fails, the agent gets a diagnostic explaining why (not a silent failure).
+- **Performance:** If Lighthouse isn't installed, `debug_perf` returns setup instructions immediately instead of failing after a 60-second timeout. For Tauri/Electron apps, metrics are flagged as low-reliability with alternative profiling advice.
+- **Browser logs:** Status report separates browser errors by source context — webview, external Chrome, or Lighthouse-triggered — so the agent doesn't waste time investigating artifacts.
 - **Verification:** If a visual bug was captured during investigation, `debug_verify` auto-captures an after-fix screenshot for comparison.
 - **SKILL.md:** Includes a capabilities table so the agent knows upfront which tools are available — no wasted calls.
 
@@ -220,11 +221,24 @@ dbg   # setup only, agent calls tools manually
 1. Read debug://status  → see live terminal/browser/build errors instantly
 2. debug_investigate    → deep analysis + source code + git + past solutions
 3. debug_instrument     → add logging if more info needed
-4. debug_capture        → collect runtime output
+4. debug_capture        → collect runtime output (or wait for it with wait=true)
 5. (apply fix)
 6. debug_verify         → confirm fix, auto-save to memory
 7. debug_cleanup        → save diagnosis for future sessions
 ```
+
+**Tool decision tree** — the activation rules teach the agent which tools to reach for:
+
+| Signal needed | Tool | When to use |
+|---|---|---|
+| Runtime errors, app state | `debug://status` | Always first |
+| Deep error analysis | `debug_investigate` | Stack traces, error messages |
+| Performance metrics | `debug_perf` | Slow page loads, layout shifts |
+| Visual/layout state | `debug_visual` | Overlap, misalignment, CSS bugs |
+| Long-running output | `debug_capture` with `wait: true` | Async ops, build processes, generation tasks |
+| Past solutions | `debug_recall` | Recurring errors |
+
+For complex or multi-signal bugs, use `/debug-all` — runs all diagnostic tools in parallel for maximum coverage.
 
 ### Tauri / Electron support
 
@@ -327,7 +341,12 @@ Output: { error, sourceCode, git, environment, pastSolutions, nextStep, triage, 
 
 Input:  { error: "the nav bar overlaps the hero section", files: ["src/Nav.css"] }
 Output: { ..., visualCapture: { screenshot, elementsFound }, visualHint: { isVisualBug: true } }
+
+Input:  { error: "LoginForm shows wrong email after submit" }
+Output: { sourceCode: [{ file: "src/LoginForm.tsx", errorLine: 42, snippet: "...email..." }], ... }
 ```
+
+**Behavior bugs without stack traces:** When no stack trace or files are provided, the engine infers relevant files from the description — extracting component names, CSS classes, HTML tags, route paths, and quoted strings. It then targets the source output to lines containing those terms instead of dumping the file header.
 
 ### debug_recall
 
@@ -366,7 +385,13 @@ Pass `condition: "value === null"` to wrap the log in an `if` block — no spam 
 
 ### debug_capture
 
-Run a command and capture output, or drain buffered events from terminal, browser, and Tauri log files. Tagged output is linked to hypotheses. Results are paginated.
+Three modes:
+
+1. **Run a command** — `{ command: "npm test" }` — captures stdout/stderr
+2. **Drain buffers** — `{}` — snapshot of buffered terminal/browser/Tauri log events
+3. **Wait for output** — `{ wait: true }` — blocks until new output arrives (up to 60s)
+
+Wait mode is designed for long-running processes (image generation, builds, async operations) where the agent would otherwise poll `debug://status` repeatedly. Tagged output is linked to hypotheses. Results are paginated.
 
 ### debug_verify
 
@@ -396,9 +421,11 @@ Lightweight view of current state: hypotheses, active instruments, recent captur
 
 Capture a Lighthouse performance snapshot for a URL. Pass `phase: "before"` before a fix and `phase: "after"` to get a comparison. Requires Lighthouse + Chrome (run `dbg doctor` to check).
 
+**Tauri/Electron aware:** When a desktop app framework is detected, the response includes `metricsReliability: "low"` with a disclaimer that Lighthouse runs in headless Chrome (not the native webview), alternative profiling advice for the framework, and a count of browser errors triggered during the audit (which ARE still valuable for finding real bugs).
+
 ```
 Input:  { sessionId, url, phase?: "before" | "after" }
-Output: { LCP, CLS, INP, TBT, speedIndex, comparison? }
+Output: { LCP, CLS, INP, TBT, speedIndex, metricsReliability, comparison? }
 ```
 
 ### debug_visual
@@ -564,6 +591,14 @@ src/
 ```
 
 ## Changelog
+
+### v0.14.0 — Diagnostic Depth + Agent Workflow Intelligence
+- **Ghost OS diagnostics** — `debug://status` shows visual debugging connection state, last error, and setup instructions. Failed visual captures return diagnostic info instead of failing silently.
+- **Browser log source tagging** — status report separates browser errors by source context (webview vs external Chrome vs Lighthouse-triggered) so agents don't investigate artifacts.
+- **Blocking capture** — `debug_capture` accepts `wait: true` to block until new output arrives (up to 60s), eliminating poll loops for long-running processes.
+- **Tauri-aware perf** — `debug_perf` returns `metricsReliability: "low"` for Tauri/Electron apps, framework-specific profiling advice, and count of browser errors triggered during audit.
+- **Smarter behavior bug investigation** — `debug_investigate` infers relevant files from description text (component names, CSS classes, HTML tags, route paths, quoted strings) and targets source output to matching lines instead of dumping file headers.
+- **Tool decision tree in rules** — activation rules now teach agents when to use `debug_perf`, `debug_visual`, `debug_capture wait:true`, and `debug_recall` — not just the core investigate/verify flow.
 
 ### v0.11.0 — Live Activity Feed + `dbg` Alias
 - **Live activity feed** in serve terminal — see what the toolkit does for the agent in real time

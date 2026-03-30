@@ -5,6 +5,15 @@
  * Provides typed wrappers for screenshot, DOM read, element inspection.
  * Gracefully degrades when Ghost OS is not installed.
  */
+export interface VisualDiagnostic {
+    connected: boolean;
+    binaryFound: boolean;
+    binaryPath: string | null;
+    lastError: string | null;
+    lastSuccessTs: number | null;
+    lastSuccessAgo: string | null;
+}
+export declare function getVisualDiagnostic(): VisualDiagnostic;
 export declare function connectToGhostOs(): Promise<boolean>;
 export declare function disconnectGhostOs(): Promise<void>;
 export declare function isGhostConnected(): boolean;

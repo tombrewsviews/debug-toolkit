@@ -4,6 +4,15 @@
  * Runs Lighthouse in headless Chrome, extracts Web Vitals,
  * and compares before/after snapshots for regression detection.
  */
+export interface AppFrameworkInfo {
+    framework: "tauri" | "electron" | null;
+    warning: string | null;
+}
+/**
+ * Detect if the project uses Tauri or Electron.
+ * Returns a warning about Lighthouse accuracy when running outside a native webview.
+ */
+export declare function detectAppFramework(cwd: string): AppFrameworkInfo;
 export interface LighthouseMetrics {
     lcp: number | null;
     cls: number | null;
@@ -28,6 +37,10 @@ export declare function extractMetrics(lighthouseResult: Record<string, unknown>
  * Negative diff = improvement (lower is better for all metrics).
  */
 export declare function compareSnapshots(before: LighthouseMetrics, after: LighthouseMetrics): MetricDiff;
+/**
+ * Framework-specific performance advice when Lighthouse metrics are unreliable.
+ */
+export declare function getAlternativePerfAdvice(framework: "tauri" | "electron"): string;
 /**
  * Run Lighthouse against a URL and return extracted metrics.
  * Requires Chrome to be installed. Returns null on failure.

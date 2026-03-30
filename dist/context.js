@@ -13,7 +13,7 @@
  */
 import { execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, relative, isAbsolute, resolve } from "node:path";
+import { join, basename, relative, isAbsolute, resolve } from "node:path";
 import { redactSensitiveData } from "./security.js";
 // Match "at FnName (file:line:col)" or "at file:line:col"
 const NODE_FRAME = /at\s+(?:([\w$.< >\[\]]+?)\s+)?\(?([^\s()]+):(\d+):(\d+)\)?/gm;
@@ -362,12 +362,101 @@ export function isVisualError(category, file, description) {
         return true;
     return false;
 }
+/**
+ * Infer relevant files from a bug description when no stack trace or hint files are provided.
+ * Extracts component names, file references, and matches against recent git changes.
+ */
+/**
+ * Extract search terms from a bug description for targeted source reading.
+ * Returns terms the user mentioned that we should highlight in source code.
+ */
+function extractSearchTerms(description) {
+    const terms = [];
+    // Quoted strings — user is mentioning specific text in the UI
+    const quoted = description.match(/["']([^"']{2,50})["']/g) ?? [];
+    for (const q of quoted)
+        terms.push(q.slice(1, -1));
+    // "shows X but should show Y" / "displays X instead of Y" patterns
+    const showsPattern = /(?:shows?|displays?|renders?|outputs?)\s+["']?(\w[\w\s]{1,30})["']?\s+(?:but|instead|rather)\s+(?:should|of)\s+(?:show|display|render|be)\s+["']?(\w[\w\s]{1,30})["']?/i;
+    const showsMatch = showsPattern.exec(description);
+    if (showsMatch) {
+        terms.push(showsMatch[1].trim(), showsMatch[2].trim());
+    }
+    // CSS class names (.some-class)
+    const cssClasses = description.match(/\.([a-z][\w-]+)/g) ?? [];
+    for (const c of cssClasses)
+        terms.push(c.slice(1));
+    // JSX/HTML tags (<SomeTag)
+    const htmlTags = description.match(/<([A-Z][\w.]+)/g) ?? [];
+    for (const t of htmlTags)
+        terms.push(t.slice(1));
+    return [...new Set(terms)].slice(0, 10);
+}
+function inferFilesFromDescription(description, cwd) {
+    const files = [];
+    // Extract PascalCase component names (React/Vue/Svelte conventions)
+    // Broader: any PascalCase identifier, not just ones with known suffixes
+    const componentNames = description.match(/\b[A-Z][a-zA-Z]{2,}(?:Page|View|Component|Screen|Modal|Dialog|Form|List|Card|Button|Input|Header|Footer|Sidebar|Nav|Menu|Tab|Panel|Widget|Item|Row|Cell)?\b/g)?.filter((n) => n.length >= 4 && !/^(?:React|Vue|Svelte|Angular|Node|Chrome|Safari|Firefox|HTML|CSS|JSON|HTTP|CORS|DOM|URL|API|SDK|CLI|App|The|This|That|When|What|How|But|And|Not|For)$/.test(n)) ?? [];
+    // Extract quoted file references and file-like patterns
+    const fileRefs = description.match(/\b[\w/.-]+\.(?:tsx?|jsx?|vue|svelte|py|rs|go)\b/g) ?? [];
+    // Extract route paths (/some/path) that might map to page files
+    const routePaths = description.match(/(?:^|\s)(\/[\w/-]+)/g)?.map((p) => p.trim()) ?? [];
+    const searchTerms = [...new Set([...componentNames, ...fileRefs])];
+    // Search recent git changes for matching files
+    try {
+        const recentFiles = execSync("git diff --name-only HEAD~5 2>/dev/null", {
+            cwd, timeout: 5000, encoding: "utf-8",
+        }).trim().split("\n").filter(Boolean);
+        for (const name of searchTerms) {
+            const baseName = name.replace(/\.[^.]+$/, "").toLowerCase();
+            const matches = recentFiles.filter((f) => f.toLowerCase().includes(baseName));
+            files.push(...matches.slice(0, 2));
+        }
+    }
+    catch { }
+    // Search common source directories for matching files (broader than just src/)
+    if (files.length === 0 && searchTerms.length > 0) {
+        const searchDirs = ["src", "app", "pages", "components", "lib", "views"].filter((d) => existsSync(join(cwd, d)));
+        if (searchDirs.length > 0) {
+            try {
+                const findCmd = searchDirs.map((d) => `find ${d} -type f \\( -name '*.tsx' -o -name '*.ts' -o -name '*.jsx' -o -name '*.js' -o -name '*.vue' -o -name '*.svelte' \\)`).join(" && ");
+                const allFiles = execSync(findCmd + " 2>/dev/null", {
+                    cwd, timeout: 5000, encoding: "utf-8",
+                }).trim().split("\n").filter(Boolean);
+                for (const name of componentNames) {
+                    const lower = name.toLowerCase();
+                    const matches = allFiles.filter((f) => basename(f).toLowerCase().startsWith(lower));
+                    files.push(...matches.slice(0, 2));
+                }
+                // Route path matching: /settings → pages/settings, app/settings
+                for (const route of routePaths) {
+                    const segments = route.split("/").filter(Boolean);
+                    if (segments.length === 0)
+                        continue;
+                    const lastSegment = segments[segments.length - 1].toLowerCase();
+                    const matches = allFiles.filter((f) => basename(f).toLowerCase().includes(lastSegment));
+                    files.push(...matches.slice(0, 2));
+                }
+            }
+            catch { }
+        }
+    }
+    return [...new Set(files)].slice(0, 5);
+}
 export function investigate(errorText, cwd, hintFiles) {
     const frames = parseStackFrames(errorText, cwd);
     let sourceCode = extractSourceSnippets(frames, cwd);
     // If no stack frames but hint files provided, extract source from those files
     if (sourceCode.length === 0 && hintFiles && hintFiles.length > 0) {
         sourceCode = extractSourceFromHintFiles(hintFiles, cwd);
+    }
+    // If still no source code and no hint files, try to infer from the description
+    if (sourceCode.length === 0 && (!hintFiles || hintFiles.length === 0)) {
+        const inferred = inferFilesFromDescription(errorText, cwd);
+        if (inferred.length > 0) {
+            const terms = extractSearchTerms(errorText);
+            sourceCode = extractSourceFromHintFiles(inferred, cwd, terms.length > 0 ? terms : undefined);
+        }
     }
     const relevantFiles = sourceCode.map((s) => s.file);
     const git = getGitContext(cwd, relevantFiles);
@@ -378,8 +467,11 @@ export function investigate(errorText, cwd, hintFiles) {
 /**
  * Extract source snippets from explicitly provided file paths.
  * Used for logic bugs where there's no stack trace to parse.
+ *
+ * When searchTerms are provided, finds lines containing those terms and shows
+ * context around each match. Falls back to first 80 lines when no matches found.
  */
-function extractSourceFromHintFiles(files, cwd) {
+function extractSourceFromHintFiles(files, cwd, searchTerms) {
     const snippets = [];
     for (const filePath of files.slice(0, 5)) { // Max 5 files
         const resolved = resolve(cwd, filePath);
@@ -388,7 +480,60 @@ function extractSourceFromHintFiles(files, cwd) {
         try {
             const content = readFileSync(resolved, "utf-8");
             const allLines = content.split("\n");
-            // Show first 80 lines or full file if shorter
+            // Try targeted extraction when search terms are provided
+            if (searchTerms && searchTerms.length > 0) {
+                const matchingLineNums = [];
+                for (let i = 0; i < allLines.length; i++) {
+                    const lower = allLines[i].toLowerCase();
+                    for (const term of searchTerms) {
+                        if (lower.includes(term.toLowerCase())) {
+                            matchingLineNums.push(i);
+                            break;
+                        }
+                    }
+                }
+                if (matchingLineNums.length > 0) {
+                    // Show 15 lines of context around each match, merge overlapping ranges
+                    const CONTEXT = 15;
+                    const ranges = [];
+                    for (const lineNum of matchingLineNums) {
+                        const start = Math.max(0, lineNum - CONTEXT);
+                        const end = Math.min(allLines.length - 1, lineNum + CONTEXT);
+                        if (ranges.length > 0 && start <= ranges[ranges.length - 1][1] + 1) {
+                            ranges[ranges.length - 1][1] = end; // merge
+                        }
+                        else {
+                            ranges.push([start, end]);
+                        }
+                    }
+                    // Build output from merged ranges (cap at ~100 lines total)
+                    const parts = [];
+                    let totalLines = 0;
+                    for (const [start, end] of ranges) {
+                        if (totalLines > 100) {
+                            parts.push(`  ... (more matches omitted)`);
+                            break;
+                        }
+                        if (parts.length > 0)
+                            parts.push("  ---");
+                        for (let i = start; i <= end && totalLines <= 100; i++) {
+                            const marker = matchingLineNums.includes(i) ? ">" : " ";
+                            parts.push(`${marker}${String(i + 1).padStart(5)} | ${allLines[i]}`);
+                            totalLines++;
+                        }
+                    }
+                    snippets.push({
+                        file: resolved,
+                        relativePath: relative(cwd, resolved),
+                        startLine: ranges[0][0] + 1,
+                        endLine: ranges[ranges.length - 1][1] + 1,
+                        errorLine: matchingLineNums[0] + 1,
+                        lines: parts.join("\n"),
+                    });
+                    continue; // Skip fallback for this file
+                }
+            }
+            // Fallback: show first 80 lines or full file if shorter
             const lines = allLines.slice(0, 80).map((l, i) => `${String(i + 1).padStart(6)} | ${l}`).join("\n");
             const truncated = allLines.length > 80 ? `\n  ... (${allLines.length - 80} more lines)` : "";
             snippets.push({

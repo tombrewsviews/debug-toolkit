@@ -12,6 +12,23 @@ import { getPackageVersion } from "./utils.js";
 let ghostClient = null;
 let ghostTransport = null;
 let connectionAttempted = false;
+// Diagnostic state for surfacing connection issues
+let lastError = null;
+let lastSuccessTs = null;
+let resolvedBinaryPath = null;
+export function getVisualDiagnostic() {
+    const ago = lastSuccessTs
+        ? `${Math.round((Date.now() - lastSuccessTs) / 1000)}s ago`
+        : null;
+    return {
+        connected: ghostClient !== null,
+        binaryFound: resolvedBinaryPath !== null,
+        binaryPath: resolvedBinaryPath,
+        lastError,
+        lastSuccessTs,
+        lastSuccessAgo: ago,
+    };
+}
 function findGhostBinary() {
     try {
         const path = execSync("which ghost 2>/dev/null || which ghost-os 2>/dev/null", {
@@ -31,8 +48,11 @@ export async function connectToGhostOs() {
         return false; // Don't retry failed connections repeatedly
     connectionAttempted = true;
     const binary = findGhostBinary();
-    if (!binary)
+    resolvedBinaryPath = binary;
+    if (!binary) {
+        lastError = "Ghost OS binary not found (checked 'ghost' and 'ghost-os' in PATH)";
         return false;
+    }
     try {
         ghostTransport = new StdioClientTransport({
             command: binary,
@@ -46,12 +66,15 @@ export async function connectToGhostOs() {
         // Verify connection by listing tools
         const tools = await ghostClient.listTools();
         if (!tools.tools.some((t) => t.name === "ghost_screenshot")) {
+            lastError = "Ghost OS connected but ghost_screenshot tool not found — may be an incompatible version";
             await disconnectGhostOs();
             return false;
         }
+        lastError = null;
         return true;
     }
-    catch {
+    catch (e) {
+        lastError = `Connection failed: ${e instanceof Error ? e.message : String(e)}`;
         ghostClient = null;
         ghostTransport = null;
         return false;
@@ -77,6 +100,8 @@ async function callTool(name, args = {}) {
         return null;
     try {
         const result = await ghostClient.callTool({ name, arguments: args });
+        lastSuccessTs = Date.now();
+        lastError = null;
         // MCP tool results have a content array
         if (result.content && Array.isArray(result.content) && result.content.length > 0) {
             const first = result.content[0];
@@ -95,7 +120,8 @@ async function callTool(name, args = {}) {
         }
         return result;
     }
-    catch {
+    catch (e) {
+        lastError = `${name} failed: ${e instanceof Error ? e.message : String(e)}`;
         return null;
     }
 }

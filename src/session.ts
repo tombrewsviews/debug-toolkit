@@ -31,6 +31,8 @@ export interface Capture {
   markerTag: string | null;
   data: unknown;
   hypothesisId: string | null;
+  lighthouseTriggered?: boolean;
+  sourceContext?: "webview" | "external" | "lighthouse";
 }
 
 export interface ScreenshotRecord {
