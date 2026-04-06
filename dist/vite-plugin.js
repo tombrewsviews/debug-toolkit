@@ -1,21 +1,21 @@
 /**
- * Vite plugin for debug-toolkit.
+ * Vite plugin for stackpack-debug.
  * Injects console/error/network capture directly into HTML served by Vite.
  *
  * This is critical for Tauri/Electron apps where the webview loads from
- * the Vite dev server directly (not through the debug-toolkit proxy).
+ * the Vite dev server directly (not through the stackpack-debug proxy).
  *
  * Usage in vite.config.ts:
- *   import debugToolkit from 'debug-toolkit/vite-plugin';
+ *   import debugToolkit from 'stackpack-debug/vite-plugin';
  *   export default defineConfig({ plugins: [debugToolkit()] });
  *
- * Or auto-configured by `npx debug-toolkit init` for Tauri projects.
+ * Or auto-configured by `npx stackpack-debug init` for Tauri projects.
  */
 export default function debugToolkitPlugin(opts = {}) {
     const devOnly = opts.devOnly ?? true;
     let wsPort = opts.wsPort ?? parseInt(process.env.DEBUG_TOOLKIT_WS_PORT ?? "0", 10);
     return {
-        name: "debug-toolkit",
+        name: "stackpack-debug",
         apply: devOnly ? "serve" : undefined,
         configResolved(config) {
             // Auto-detect WS port: proxy listens on devServerPort + 1000
@@ -32,7 +32,7 @@ export default function debugToolkitPlugin(opts = {}) {
             return [
                 {
                     tag: "script",
-                    attrs: { "data-debug-toolkit": "true" },
+                    attrs: { "data-stackpack-debug": "true" },
                     children: script,
                     injectTo: "body",
                 },
@@ -44,10 +44,10 @@ function buildInlineScript(wsPort) {
     return `
 (function() {
   "use strict";
-  if (window.__debug_toolkit_injected) return;
-  window.__debug_toolkit_injected = true;
+  if (window.__stackpack_debug_injected) return;
+  window.__stackpack_debug_injected = true;
 
-  var wsUrl = "ws://127.0.0.1:${wsPort}/__debug_toolkit/ws";
+  var wsUrl = "ws://127.0.0.1:${wsPort}/__stackpack_debug/ws";
   var ws;
   var queue = [];
   var reconnectAttempts = 0;
@@ -67,7 +67,7 @@ function buildInlineScript(wsPort) {
     try { ws = new WebSocket(wsUrl); } catch (_) { return; }
     ws.addEventListener("open", function() {
       reconnectAttempts = 0;
-      send("console", { level: "info", args: ["[debug-toolkit] Connected to capture server"] });
+      send("console", { level: "info", args: ["[stackpack-debug] Connected to capture server"] });
       for (var i = 0; i < queue.length; i++) ws.send(queue[i]);
       queue = [];
     });

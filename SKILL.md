@@ -1,10 +1,10 @@
 ---
-name: debug-toolkit
+name: stackpack-debug
 description: "Runtime DevTools for AI agents. Captures terminal output, browser console, build errors, TypeScript errors, git diffs, and screenshots from the running app. MANDATORY for: any bug, error, issue, warning, crash, panic, layout problem, visual glitch, wrong behavior, performance issue, test failure, reviewing the running app, checking app health. Read debug://status FIRST — it's a live situation report. Read debug://errors for errors only. Call debug_investigate for deep analysis."
 tools: ["debug_investigate", "debug_recall", "debug_patterns", "debug_instrument", "debug_capture", "debug_verify", "debug_cleanup", "debug_session", "debug_perf", "debug_visual", "debug_setup"]
 ---
 
-# debug-toolkit — Runtime DevTools for AI Agents
+# stackpack-debug — Runtime DevTools for AI Agents
 
 The toolkit captures what's actually happening at runtime — terminal output, browser console, build errors, TypeScript errors, git diffs, screenshots, and cross-session memory. It gives you the same signals a developer sees in browser DevTools and terminal.
 
@@ -146,12 +146,12 @@ Remove instrumentation and save diagnosis to memory.
 Lightweight session status.
 
 ### debug_setup
-Check/install integrations, check for updates, or update debug-toolkit.
+Check/install integrations, check for updates, or update stackpack-debug.
 ```
 { action: "check" | "install" | "connect" | "disconnect" | "check-update" | "update" }
 ```
 - `check-update` — compare installed version against npm registry
-- `update` — update debug-toolkit to latest, then restart Claude Code
+- `update` — update stackpack-debug to latest, then restart Claude Code
 
 ## Rules
 

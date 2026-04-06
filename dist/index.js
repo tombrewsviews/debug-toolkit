@@ -46,10 +46,10 @@ function parseArgs(argv) {
 }
 // --- /debug-all Command Template ---
 const DEBUG_ALL_COMMAND = `---
-description: Full diagnostic playbook for debug-toolkit — run ALL signals in parallel for maximum coverage
+description: Full diagnostic playbook for stackpack-debug — run ALL signals in parallel for maximum coverage
 ---
 
-# debug-toolkit — Full Diagnostic Playbook
+# stackpack-debug — Full Diagnostic Playbook
 
 Use this when debugging any bug, error, or unexpected behavior. This runs ALL diagnostic tools in parallel for maximum signal coverage, instead of just reading debug://status and guessing.
 
@@ -297,26 +297,26 @@ function initCommand(cwd) {
         success(`${c.green}All checks passed${c.reset}`);
     }
     else {
-        warn("Some checks failed — debug-toolkit will still install but serve mode may not work");
-        info(`  ${c.dim}Fix the issues above, then run: npx debug-toolkit init${c.reset}`);
+        warn("Some checks failed — stackpack-debug will still install but serve mode may not work");
+        info(`  ${c.dim}Fix the issues above, then run: npx stackpack-debug init${c.reset}`);
     }
     // Write MCP config — .mcp.json at project root (Claude Code v2.x standard)
     const mcpPath = join(cwd, ".mcp.json");
     const existing = existsSync(mcpPath) ? JSON.parse(readFileSync(mcpPath, "utf-8")) : { mcpServers: {} };
     existing.mcpServers ??= {};
     // Register ONLY the pure MCP server (lightweight, no app startup)
-    existing.mcpServers["debug-toolkit"] = {
+    existing.mcpServers["stackpack-debug"] = {
         command: "npx",
-        args: ["-y", "debug-toolkit@latest"],
+        args: ["-y", "stackpack-debug@latest"],
     };
     // REMOVE any previously registered serve mode (from older versions)
     // Serve mode should NOT be an always-on MCP server — it launches the
     // dev server which is too heavy and may fail during Claude Code startup.
-    delete existing.mcpServers["debug-toolkit-serve"];
+    delete existing.mcpServers["stackpack-debug-serve"];
     writeFileSync(mcpPath, JSON.stringify(existing, null, 2) + "\n");
     success(`MCP config ${sym.arrow} ${mcpPath}`);
     // Save serve command for reference (not auto-started)
-    const serveArgs = ["-y", "debug-toolkit", "serve"];
+    const serveArgs = ["-y", "stackpack-debug", "serve"];
     if (servePort)
         serveArgs.push("--port", String(servePort));
     serveArgs.push("--", ...devCmd);
@@ -334,10 +334,10 @@ function initCommand(cwd) {
     const rulesDir = join(cwd, ".claude", "rules");
     if (!existsSync(rulesDir))
         mkdirSync(rulesDir, { recursive: true });
-    const rulesPath = join(rulesDir, "debug-toolkit.md");
-    writeFileSync(rulesPath, `# debug-toolkit — MANDATORY for any bug or issue
+    const rulesPath = join(rulesDir, "stackpack-debug.md");
+    writeFileSync(rulesPath, `# stackpack-debug — MANDATORY for any bug or issue
 
-This project has debug-toolkit running. It captures live runtime data from the running app.
+This project has stackpack-debug running. It captures live runtime data from the running app.
 
 ## RULE: Start debugging with the toolkit, not with file exploration.
 
@@ -402,7 +402,7 @@ For complex bugs or when initial investigation is inconclusive, use \`/debug-all
     const checks = formatDoctorReport(caps);
     // Install/update SKILL.md — Claude Code auto-discovers skills from .claude/skills/
     updateSkillMd(cwd);
-    const skillPath = join(cwd, ".claude", "skills", "debug-toolkit", "SKILL.md");
+    const skillPath = join(cwd, ".claude", "skills", "stackpack-debug", "SKILL.md");
     success(`Skill installed ${sym.arrow} ${skillPath}`);
     // Install /debug-all command — Claude Code discovers commands from .claude/commands/
     const commandsDir = join(cwd, ".claude", "commands");
@@ -426,7 +426,7 @@ For complex bugs or when initial investigation is inconclusive, use \`/debug-all
                 continue;
             try {
                 const viteConf = readFileSync(viteConfPath, "utf-8");
-                if (viteConf.includes("debug-toolkit/vite-plugin") || viteConf.includes("debugToolkit")) {
+                if (viteConf.includes("stackpack-debug/vite-plugin") || viteConf.includes("debugToolkit")) {
                     info(`${c.green}${sym.check}${c.reset} Vite plugin already configured (webview console capture)`);
                     vitePluginAdded = true;
                 }
@@ -438,11 +438,11 @@ For complex bugs or when initial investigation is inconclusive, use \`/debug-all
                     if (lastImportIdx !== -1) {
                         const lineEnd = modified.indexOf("\n", lastImportIdx + 1);
                         modified = modified.slice(0, lineEnd + 1)
-                            + `import debugToolkit from "debug-toolkit/vite-plugin";\n`
+                            + `import debugToolkit from "stackpack-debug/vite-plugin";\n`
                             + modified.slice(lineEnd + 1);
                     }
                     else {
-                        modified = `import debugToolkit from "debug-toolkit/vite-plugin";\n` + modified;
+                        modified = `import debugToolkit from "stackpack-debug/vite-plugin";\n` + modified;
                     }
                     // Add plugin to plugins array
                     const pluginsMatch = modified.match(/plugins\s*:\s*\[/);
@@ -462,15 +462,15 @@ For complex bugs or when initial investigation is inconclusive, use \`/debug-all
         }
         if (!vitePluginAdded) {
             warn("Could not auto-configure Vite plugin for webview console capture");
-            dim("    Add manually: import debugToolkit from 'debug-toolkit/vite-plugin' to vite.config");
+            dim("    Add manually: import debugToolkit from 'stackpack-debug/vite-plugin' to vite.config");
         }
         dim("");
     }
     section("READY");
-    info(`${c.green}${sym.check}${c.reset} ${c.cyan}debug-toolkit${c.reset} registered as MCP server (auto-starts with Claude Code)`);
+    info(`${c.green}${sym.check}${c.reset} ${c.cyan}stackpack-debug${c.reset} registered as MCP server (auto-starts with Claude Code)`);
     dim("");
     info(`${c.dim}For live browser/terminal capture, run separately:${c.reset}`);
-    info(`  ${c.cyan}npx debug-toolkit serve -- ${devCmd.join(" ")}${c.reset}`);
+    info(`  ${c.cyan}npx stackpack-debug serve -- ${devCmd.join(" ")}${c.reset}`);
     dim("");
     info("Restart Claude Code to activate.");
     dim(`Config: ${mcpPath}\n`);
@@ -488,7 +488,7 @@ For complex bugs or when initial investigation is inconclusive, use \`/debug-all
             }
         }
         info("");
-        dim("  Run 'npx debug-toolkit doctor' anytime to check your setup.");
+        dim("  Run 'npx stackpack-debug doctor' anytime to check your setup.");
     }
 }
 // --- Doctor ---
@@ -570,7 +570,7 @@ async function autoInstallMissing(cwd) {
     }
     info("");
 }
-// --- SKILL.md auto-update (runs on every npx dbg / init) ---
+// --- SKILL.md auto-update (runs on every npx spdg / init) ---
 function updateSkillMd(cwd) {
     const caps = detectEnvironment(cwd);
     const capsTable = [
@@ -584,9 +584,9 @@ function updateSkillMd(cwd) {
         `| Visual (Ghost OS) | ${caps.visual.ghostOsConfigured ? "✓ Configured" : "✗ Not configured"} |`,
         `| Visual (Claude Preview) | ✓ Built into Claude Code desktop |`,
         "",
-        "Run `npx debug-toolkit doctor` to refresh this status.",
+        "Run `npx stackpack-debug doctor` to refresh this status.",
     ].join("\n");
-    const skillDir = join(cwd, ".claude", "skills", "debug-toolkit");
+    const skillDir = join(cwd, ".claude", "skills", "stackpack-debug");
     if (!existsSync(skillDir))
         mkdirSync(skillDir, { recursive: true });
     const skillPath = join(skillDir, "SKILL.md");
@@ -601,12 +601,12 @@ function updateSkillMd(cwd) {
     const finalContent = skillContent
         ? skillContent + capsTable
         : `---
-name: debug-toolkit
+name: stackpack-debug
 description: "Closed-loop debugging for AI agents. Use for runtime errors, stack traces, test failures, AND logic/behavior bugs. Start every debugging task with debug_investigate."
 tools: ["debug_investigate", "debug_recall", "debug_patterns", "debug_instrument", "debug_capture", "debug_verify", "debug_cleanup", "debug_session"]
 ---
 
-# debug-toolkit
+# stackpack-debug
 
 You have access to a debugging toolkit via MCP. Start every debugging task with \`debug_investigate\`.
 
@@ -645,7 +645,7 @@ async function guidedSetup(cwd) {
         const update = checkForUpdate();
         if (update.updateAvailable) {
             warn(`\n  ${c.yellow}${c.bold}Update available: v${update.current} → v${update.latest}${c.reset}`);
-            info(`  Run: ${c.cyan}npx debug-toolkit@latest${c.reset}`);
+            info(`  Run: ${c.cyan}npx stackpack-debug@latest${c.reset}`);
             info(`  Or in Claude Code: ${c.cyan}debug_setup action='update'${c.reset}\n`);
         }
         // Silently update SKILL.md and command on every run (picks up new content from package updates)
@@ -660,7 +660,7 @@ async function guidedSetup(cwd) {
         return;
     }
     // Fresh project — guided init
-    info("Welcome! Let's set up debug-toolkit for this project.\n");
+    info("Welcome! Let's set up stackpack-debug for this project.\n");
     const pkgPath = join(cwd, "package.json");
     if (existsSync(pkgPath)) {
         try {
@@ -670,9 +670,9 @@ async function guidedSetup(cwd) {
         }
         catch { /* skip */ }
     }
-    const proceed = await ask(`  ${c.dim}Set up debug-toolkit? (Y/n): ${c.reset}`);
+    const proceed = await ask(`  ${c.dim}Set up stackpack-debug? (Y/n): ${c.reset}`);
     if (proceed.toLowerCase() === "n") {
-        info("Setup cancelled. Run 'npx debug-toolkit' anytime to try again.");
+        info("Setup cancelled. Run 'npx stackpack-debug' anytime to try again.");
         return;
     }
     // Run the full init
@@ -709,7 +709,7 @@ async function mainMenu(cwd) {
         const choice = await select("What would you like to do?", buildMenuOptions(cwd));
         if (choice === -1) {
             // Escape or Ctrl+C — exit gracefully
-            info(`${c.dim}Run ${c.reset}npx debug-toolkit${c.dim} anytime to come back.${c.reset}\n`);
+            info(`${c.dim}Run ${c.reset}npx stackpack-debug${c.dim} anytime to come back.${c.reset}\n`);
             break;
         }
         switch (choice) {
@@ -751,7 +751,7 @@ function detectDevCommand(cwd) {
 }
 async function guidedServe(cwd) {
     const { cmd: devCmd } = detectDevCommand(cwd);
-    info(`Starting: ${c.bold}npx debug-toolkit serve -- ${devCmd}${c.reset}\n`);
+    info(`Starting: ${c.bold}npx stackpack-debug serve -- ${devCmd}${c.reset}\n`);
     const child = spawn(process.execPath, [process.argv[1], "serve", "--", ...devCmd.split(" ")], {
         stdio: "inherit",
         cwd,
@@ -801,20 +801,20 @@ async function main() {
                 break;
             }
             // Fetch latest
-            info(`Updating debug-toolkit ${c.dim}v${update.current} → v${update.latest}${c.reset}...\n`);
+            info(`Updating stackpack-debug ${c.dim}v${update.current} → v${update.latest}${c.reset}...\n`);
             try {
-                execSync("npm install -g debug-toolkit@latest", { stdio: "inherit", timeout: 60_000 });
+                execSync("npm install -g stackpack-debug@latest", { stdio: "inherit", timeout: 60_000 });
                 success(`Updated to v${update.latest}\n`);
             }
             catch {
                 // Fallback: not installed globally, clear npx cache instead
                 try {
-                    execSync("npx -y debug-toolkit@latest --version", { stdio: "pipe", timeout: 30_000 });
+                    execSync("npx -y stackpack-debug@latest --version", { stdio: "pipe", timeout: 30_000 });
                     success(`Updated npx cache to v${update.latest}\n`);
                 }
                 catch (e2) {
                     error(`Update failed: ${e2 instanceof Error ? e2.message : String(e2)}`);
-                    info(`Try manually: ${c.cyan}npm install -g debug-toolkit@latest${c.reset}`);
+                    info(`Try manually: ${c.cyan}npm install -g stackpack-debug@latest${c.reset}`);
                     break;
                 }
             }
@@ -849,7 +849,7 @@ async function main() {
         case "import": {
             const packPath = process.argv[3];
             if (!packPath) {
-                console.error("Usage: debug-toolkit import <pack-file>");
+                console.error("Usage: stackpack-debug import <pack-file>");
                 process.exit(1);
             }
             const result = importPack(cwd, packPath);
@@ -876,7 +876,7 @@ async function main() {
         case "uninstall": {
             banner();
             section("UNINSTALL");
-            info("Removing debug-toolkit from this project...\n");
+            info("Removing stackpack-debug from this project...\n");
             let removed = 0;
             // 1. Remove MCP config entries
             for (const p of [join(cwd, ".mcp.json"), join(cwd, ".claude", "mcp.json")]) {
@@ -884,10 +884,10 @@ async function main() {
                     try {
                         const config = JSON.parse(readFileSync(p, "utf-8"));
                         const servers = config.mcpServers;
-                        if (servers?.["debug-toolkit"]) {
-                            delete servers["debug-toolkit"];
+                        if (servers?.["stackpack-debug"]) {
+                            delete servers["stackpack-debug"];
                             writeFileSync(p, JSON.stringify(config, null, 2));
-                            success(`Removed debug-toolkit from ${p.replace(cwd + "/", "")}`);
+                            success(`Removed stackpack-debug from ${p.replace(cwd + "/", "")}`);
                             removed++;
                         }
                     }
@@ -895,14 +895,14 @@ async function main() {
                 }
             }
             // 2. Remove activation rules
-            const rulesPath = join(cwd, ".claude", "rules", "debug-toolkit.md");
+            const rulesPath = join(cwd, ".claude", "rules", "stackpack-debug.md");
             if (existsSync(rulesPath)) {
                 unlinkSync(rulesPath);
                 success("Removed activation rules");
                 removed++;
             }
             // 3. Remove SKILL.md
-            const skillDir = join(cwd, ".claude", "skills", "debug-toolkit");
+            const skillDir = join(cwd, ".claude", "skills", "stackpack-debug");
             if (existsSync(skillDir)) {
                 for (const f of readdirSync(skillDir))
                     unlinkSync(join(skillDir, f));
@@ -924,10 +924,10 @@ async function main() {
             }
             info("");
             if (removed > 0) {
-                success(`debug-toolkit removed. Restart Claude Code to apply changes.`);
+                success(`stackpack-debug removed. Restart Claude Code to apply changes.`);
             }
             else {
-                dim("Nothing to remove — debug-toolkit was not configured in this project.");
+                dim("Nothing to remove — stackpack-debug was not configured in this project.");
             }
             break;
         }
@@ -946,7 +946,7 @@ async function main() {
         case "serve": {
             if (parsed.childCommand.length === 0) {
                 error("No command specified");
-                dim("  Usage: debug-toolkit serve -- <command>");
+                dim("  Usage: stackpack-debug serve -- <command>");
                 process.exit(1);
             }
             const childCmd = parsed.childCommand.join(" ");

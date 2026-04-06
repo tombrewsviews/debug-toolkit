@@ -1,7 +1,7 @@
 /**
  * demo.ts — Self-contained demo that runs in any terminal.
  *
- * `npx debug-toolkit demo`
+ * `npx stackpack-debug demo`
  *
  * Creates a temp project with a real bug, runs the full debug loop
  * using the actual toolkit functions, shows exactly what an AI agent
@@ -40,7 +40,7 @@ function pause(ms) {
 }
 // ━━━ Demo project ━━━
 function createDemoProject() {
-    const dir = join(process.env.TMPDIR ?? "/tmp", `debug-toolkit-demo-${Date.now()}`);
+    const dir = join(process.env.TMPDIR ?? "/tmp", `stackpack-debug-demo-${Date.now()}`);
     mkdirSync(join(dir, "src"), { recursive: true });
     mkdirSync(join(dir, ".debug"), { recursive: true });
     // package.json
@@ -83,7 +83,7 @@ export async function getUsers() {
 `);
     // Initialize git
     execSync("git init -q", { cwd: dir });
-    execSync('git config user.email "demo@debug-toolkit.dev"', { cwd: dir });
+    execSync('git config user.email "demo@stackpack-debug.dev"', { cwd: dir });
     execSync('git config user.name "Demo"', { cwd: dir });
     execSync("git add -A && git commit -m 'initial commit' -q", { cwd: dir });
     return dir;
@@ -92,11 +92,11 @@ export async function getUsers() {
 export async function runDemo() {
     console.log(`
 ${c.bold}${c.white}┌─────────────────────────────────────────────────────────┐${c.reset}
-${c.bold}${c.white}│${c.reset}  ${c.bold}debug-toolkit${c.reset} ${c.dim}— Interactive Demo${c.reset}                         ${c.bold}${c.white}│${c.reset}
+${c.bold}${c.white}│${c.reset}  ${c.bold}stackpack-debug${c.reset} ${c.dim}— Interactive Demo${c.reset}                         ${c.bold}${c.white}│${c.reset}
 ${c.bold}${c.white}│${c.reset}                                                         ${c.bold}${c.white}│${c.reset}
 ${c.bold}${c.white}│${c.reset}  This creates a temp project with a real bug, then       ${c.bold}${c.white}│${c.reset}
 ${c.bold}${c.white}│${c.reset}  walks through exactly what an AI agent sees when        ${c.bold}${c.white}│${c.reset}
-${c.bold}${c.white}│${c.reset}  using debug-toolkit to find and fix it.                 ${c.bold}${c.white}│${c.reset}
+${c.bold}${c.white}│${c.reset}  using stackpack-debug to find and fix it.                 ${c.bold}${c.white}│${c.reset}
 ${c.bold}${c.white}│${c.reset}                                                         ${c.bold}${c.white}│${c.reset}
 ${c.bold}${c.white}│${c.reset}  ${c.dim}No AI needed. No API keys. Just the raw tools.${c.reset}        ${c.bold}${c.white}│${c.reset}
 ${c.bold}${c.white}└─────────────────────────────────────────────────────────┘${c.reset}
@@ -325,19 +325,19 @@ ${c.bold}${c.white}└───────────────────�
 
   ${c.bold}What this means for AI agents:${c.reset}
 
-    ${c.white}Without debug-toolkit:${c.reset}
+    ${c.white}Without stackpack-debug:${c.reset}
       ${c.dim}User pastes error → agent reads code → guesses fix →${c.reset}
       ${c.dim}user tests → pastes new error → repeat 5-8 times${c.reset}
       ${c.dim}Typical: 8-12 conversation turns, no learning${c.reset}
 
-    ${c.white}With debug-toolkit:${c.reset}
+    ${c.white}With stackpack-debug:${c.reset}
       ${c.green}investigate → instrument → capture → fix → verify → cleanup${c.reset}
       ${c.green}1-2 turns with full context. Diagnosis saved for next time.${c.reset}
       ${c.green}Next session: recall finds the answer instantly.${c.reset}
 
   ${c.bold}To install in your project:${c.reset}
 
-    ${c.green}npx debug-toolkit init${c.reset}
+    ${c.green}npx stackpack-debug init${c.reset}
     ${c.dim}Then restart Claude Code. Done.${c.reset}
 
   ${c.dim}Demo project: ${dir}${c.reset}

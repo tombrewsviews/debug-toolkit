@@ -122,10 +122,10 @@ export function ensureGitignore(projectRoot) {
         if (content.includes(".debug/") || content.includes(".debug")) {
             return; // Already ignored
         }
-        appendFileSync(gitignorePath, "\n# debug-toolkit session data\n.debug/\n");
+        appendFileSync(gitignorePath, "\n# stackpack-debug session data\n.debug/\n");
     }
     else {
-        writeFileSync(gitignorePath, "# debug-toolkit session data\n.debug/\n");
+        writeFileSync(gitignorePath, "# stackpack-debug session data\n.debug/\n");
     }
 }
 // --- Expression sanitization ---

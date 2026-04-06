@@ -1,14 +1,14 @@
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
-const HOOK_MARKER_START = "# >>> debug-toolkit pre-commit check";
-const HOOK_MARKER_END = "# <<< debug-toolkit pre-commit check";
+const HOOK_MARKER_START = "# >>> stackpack-debug pre-commit check";
+const HOOK_MARKER_END = "# <<< stackpack-debug pre-commit check";
 const HOOK_CONTENT = `
 ${HOOK_MARKER_START}
-# Block commits containing debug-toolkit instrumentation markers
+# Block commits containing stackpack-debug instrumentation markers
 if git diff --cached --name-only | xargs grep -l "__DBG_START_" 2>/dev/null | grep -v node_modules | grep -v .debug; then
   echo ""
-  echo "\\033[31mERROR: debug-toolkit instrumentation markers found in staged files.\\033[0m"
-  echo "Run 'npx debug-toolkit clean' to remove them before committing."
+  echo "\\033[31mERROR: stackpack-debug instrumentation markers found in staged files.\\033[0m"
+  echo "Run 'npx stackpack-debug clean' to remove them before committing."
   echo ""
   exit 1
 fi
@@ -95,7 +95,7 @@ export function uninstallHook(cwd) {
     }
     const content = readFileSync(hookPath, "utf-8");
     if (!content.includes(HOOK_MARKER_START)) {
-        return { removed: false, message: "debug-toolkit hook not found in pre-commit." };
+        return { removed: false, message: "stackpack-debug hook not found in pre-commit." };
     }
     // Remove our section
     const regex = new RegExp(`\\n?${HOOK_MARKER_START}[\\s\\S]*?${HOOK_MARKER_END}\\n?`, "g");

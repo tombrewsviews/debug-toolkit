@@ -1,7 +1,7 @@
 /**
  * demo.ts — Self-contained demo that runs in any terminal.
  *
- * `npx debug-toolkit demo`
+ * `npx stackpack-debug demo`
  *
  * Creates a temp project with a real bug, runs the full debug loop
  * using the actual toolkit functions, shows exactly what an AI agent

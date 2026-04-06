@@ -74,7 +74,7 @@ export async function connectToGhostOs(): Promise<boolean> {
     });
 
     ghostClient = new Client({
-      name: "debug-toolkit",
+      name: "stackpack-debug",
       version: getPackageVersion(),
     });
 

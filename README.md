@@ -1,20 +1,20 @@
 > Part of the [StackPack](https://github.com/stackpackdev) ecosystem — the complete toolkit for building software in the agent age.
 
-# debug-toolkit
+# stackpack-debug
 
 Runtime DevTools for AI agents. Gives your agent the same signals a developer sees in browser DevTools and terminal — console logs, network errors, build failures, runtime exceptions — over MCP, so it can debug from captured output instead of guessing from source code.
 
 ```bash
-npm i -g debug-toolkit            # install globally (one time)
-dbg                               # guided setup (first time) or menu (returning)
+npm i -g stackpack-debug            # install globally (one time)
+spdg                               # guided setup (first time) or menu (returning)
 ```
 
 ## Quick Start
 
 ```bash
-npm i -g debug-toolkit
+npm i -g stackpack-debug
 cd your-project
-dbg
+spdg
 ```
 
 **First time?** The guided setup detects your project, installs MCP config, checks optional integrations, and offers to install missing tools — all interactively.
@@ -26,24 +26,24 @@ dbg
 ### Direct Commands (for scripts and CI)
 
 ```
-dbg init            # non-interactive setup
-dbg doctor          # check environment + optional integrations
-dbg serve -- npm run dev   # start dev server with capture + live activity feed
-dbg demo            # see it work (no AI needed)
-dbg export [path]   # export debug memory as a knowledge pack
-dbg import <path>   # import a knowledge pack into this project
+spdg init            # non-interactive setup
+spdg doctor          # check environment + optional integrations
+spdg serve -- npm run dev   # start dev server with capture + live activity feed
+spdg demo            # see it work (no AI needed)
+spdg export [path]   # export debug memory as a knowledge pack
+spdg import <path>   # import a knowledge pack into this project
 ```
 
 ## What Happens During Setup
 
-`dbg` (or `dbg init`) does the following:
+`spdg` (or `spdg init`) does the following:
 
 1. **Detects your project** — reads `package.json`, identifies Tauri/Vite/React projects
 2. **Preflight checks** — validates Node.js version, dependencies, git, Rust (if Tauri)
 3. **Writes `.mcp.json`** — registers the MCP server for Claude Code
 4. **Installs pre-commit hook** — blocks accidental commits containing debug markers
-5. **Creates activation rules** — `.claude/rules/debug-toolkit.md` tells Claude when to use the toolkit
-6. **Installs SKILL.md** — `.claude/skills/debug-toolkit/SKILL.md` with a dynamic capabilities table
+5. **Creates activation rules** — `.claude/rules/stackpack-debug.md` tells Claude when to use the toolkit
+6. **Installs SKILL.md** — `.claude/skills/stackpack-debug/SKILL.md` with a dynamic capabilities table
 7. **Checks optional integrations** — reports what's available and what's missing with fix commands
 
 ### Optional Integrations
@@ -59,7 +59,7 @@ All optional — the toolkit works without any of them. When a tool needs an int
 
 ### Ghost OS Deep Integration
 
-When Ghost OS is installed, debug-toolkit connects to it internally as an MCP client — no manual orchestration needed:
+When Ghost OS is installed, stackpack-debug connects to it internally as an MCP client — no manual orchestration needed:
 
 ```
 debug_investigate detects CSS bug
@@ -90,7 +90,7 @@ Without Ghost OS, all visual features gracefully fall back to advisory hints. Th
 
 ### Installing Integrations
 
-Optional integrations (Lighthouse, Chrome, Ghost OS) are auto-installed during `dbg` setup. The agent can also check and install them mid-conversation via the `debug_setup` MCP tool:
+Optional integrations (Lighthouse, Chrome, Ghost OS) are auto-installed during `spdg` setup. The agent can also check and install them mid-conversation via the `debug_setup` MCP tool:
 
 ```
 debug_setup({ action: "check" })
@@ -112,7 +112,7 @@ debug_setup({ action: "install", integration: "lighthouse" })
 Run anytime to verify your setup:
 
 ```bash
-dbg doctor
+spdg doctor
 ```
 
 ```
@@ -143,7 +143,7 @@ The MCP server detects available integrations at startup and connects to Ghost O
 
 ## See It Work
 
-Run `dbg demo` — creates a temp project with a real bug, walks through the full debug loop, no AI needed:
+Run `spdg demo` — creates a temp project with a real bug, walks through the full debug loop, no AI needed:
 
 ```
 ━━━ Step 1: debug_investigate ━━━
@@ -185,7 +185,7 @@ Run `dbg demo` — creates a temp project with a real bug, walks through the ful
 
 When an AI agent hits a bug, it reads code and guesses a fix. You run it, paste the error back, the agent guesses again. Repeat 5-8 times.
 
-debug-toolkit eliminates that loop. It captures terminal output, browser console, and build errors from the running app — then serves them to the agent proactively. The agent sees what's happening at runtime, not just what's written in files.
+stackpack-debug eliminates that loop. It captures terminal output, browser console, and build errors from the running app — then serves them to the agent proactively. The agent sees what's happening at runtime, not just what's written in files.
 
 ## How It Works
 
@@ -193,13 +193,13 @@ debug-toolkit eliminates that loop. It captures terminal output, browser console
 
 **Serve mode** (recommended) — wraps your dev server to capture everything:
 ```bash
-dbg serve -- npm run dev     # web project
-dbg serve -- npm run tauri -- dev  # Tauri project
+spdg serve -- npm run dev     # web project
+spdg serve -- npm run tauri -- dev  # Tauri project
 ```
 
 **Pure MCP mode** — just the tools, no capture:
 ```bash
-dbg   # setup only, agent calls tools manually
+spdg   # setup only, agent calls tools manually
 ```
 
 ### Architecture
@@ -244,11 +244,11 @@ For complex or multi-signal bugs, use `/debug-all` — runs all diagnostic tools
 
 ### Tauri / Electron support
 
-For apps with embedded webviews, the HTTP proxy can't inject scripts. debug-toolkit provides a **Vite plugin** that injects console capture directly:
+For apps with embedded webviews, the HTTP proxy can't inject scripts. stackpack-debug provides a **Vite plugin** that injects console capture directly:
 
 ```typescript
-// vite.config.ts — auto-configured during `dbg` setup for Tauri projects
-import debugToolkit from "debug-toolkit/vite-plugin";
+// vite.config.ts — auto-configured during `spdg` setup for Tauri projects
+import debugToolkit from "stackpack-debug/vite-plugin";
 export default defineConfig({ plugins: [debugToolkit()] });
 ```
 
@@ -259,7 +259,7 @@ This forwards `console.log/warn/error`, global errors, and failed network reques
 ### Any project (JS/TS/Python/Go)
 
 ```bash
-dbg
+spdg
 ```
 
 Guided setup: detects your project, writes `.mcp.json`, installs hooks and rules. Restart Claude Code and you're done.
@@ -268,10 +268,10 @@ Guided setup: detects your project, writes `.mcp.json`, installs hooks and rules
 
 ```bash
 cd my-tauri-app
-dbg
+spdg
 ```
 
-If `src-tauri/` exists, debug-toolkit automatically:
+If `src-tauri/` exists, stackpack-debug automatically:
 - Sets dev command to `cargo tauri dev`
 - Enables `RUST_BACKTRACE=1` and `RUST_LOG=info`
 - Parses Rust panics, backtraces, and cargo build errors
@@ -285,9 +285,9 @@ Add to `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "debug-toolkit": {
+    "stackpack-debug": {
       "command": "npx",
-      "args": ["-y", "debug-toolkit"]
+      "args": ["-y", "stackpack-debug"]
     }
   }
 }
@@ -298,14 +298,14 @@ Add to `.mcp.json`:
 **Pure MCP** (default) — Just the MCP server on stdio. Agent gets all tools. No wrapper needed.
 
 ```bash
-dbg
+spdg
 ```
 
 **Serve** — Wraps your dev server. Adds browser console/network capture via HTTP proxy + WebSocket, plus a **live activity feed** showing what the toolkit does for the agent in real time.
 
 ```bash
-dbg serve -- npm run dev
-dbg serve -- cargo tauri dev
+spdg serve -- npm run dev
+spdg serve -- cargo tauri dev
 ```
 
 Activity feed output (in your terminal while the agent debugs):
@@ -421,7 +421,7 @@ Lightweight view of current state: hypotheses, active instruments, recent captur
 
 ### debug_perf
 
-Capture a Lighthouse performance snapshot for a URL. Pass `phase: "before"` before a fix and `phase: "after"` to get a comparison. Requires Lighthouse + Chrome (run `dbg doctor` to check).
+Capture a Lighthouse performance snapshot for a URL. Pass `phase: "before"` before a fix and `phase: "after"` to get a comparison. Requires Lighthouse + Chrome (run `spdg doctor` to check).
 
 **Tauri/Electron aware:** When a desktop app framework is detected, the response includes `metricsReliability: "low"` with a disclaimer that Lighthouse runs in headless Chrome (not the native webview), alternative profiling advice for the framework, and a count of browser errors triggered during the audit (which ARE still valuable for finding real bugs).
 
@@ -436,7 +436,7 @@ Capture visual state via Ghost OS — screenshot, element inspection, annotated 
 
 ```
 Input:  { sessionId, action: "screenshot" }
-Output: { screenshot: ".debug/screenshots/dbg_xxx_manual_123.png" }
+Output: { screenshot: ".debug/screenshots/spdg_xxx_manual_123.png" }
 
 Input:  { sessionId, action: "inspect", query: "#nav-bar" }
 Output: { elements: [{ role: "AXGroup", name: "nav-bar", actionable: true }], count: 1 }
@@ -468,7 +468,7 @@ Output: { disconnected: true, message: "Ghost OS disconnected" }
 
 ## Memory System
 
-debug-toolkit learns from every session. The memory system is designed to scale:
+stackpack-debug learns from every session. The memory system is designed to scale:
 
 **Write-Ahead Log** — Mutations are appended as single JSON lines instead of rewriting the entire file. Full compaction runs when the WAL exceeds 50 entries or 100KB.
 
@@ -516,8 +516,8 @@ debug-toolkit learns from every session. The memory system is designed to scale:
 ```bash
 npm test                    # 79 tests across 19 files
 npm run test:watch          # watch mode
-dbg demo     # full workflow with real bug
-dbg doctor   # verify environment setup
+spdg demo     # full workflow with real bug
+spdg doctor   # verify environment setup
 ```
 
 ## Prerequisites
@@ -549,9 +549,9 @@ Ghost OS requires system permissions that must be granted manually:
 
 These permissions cannot be granted programmatically. The first time Ghost OS runs, macOS will prompt for each permission.
 
-### What `dbg doctor` Checks
+### What `spdg doctor` Checks
 
-Run `dbg doctor` to verify all prerequisites at once. It groups checks into:
+Run `spdg doctor` to verify all prerequisites at once. It groups checks into:
 
 - **Core** (required): Node.js version, Git, `.debug/` directory
 - **Performance** (optional): Lighthouse CLI, Chrome binary
@@ -610,11 +610,11 @@ src/
 - **Smarter behavior bug investigation** — `debug_investigate` infers relevant files from description text (component names, CSS classes, HTML tags, route paths, quoted strings) and targets source output to matching lines instead of dumping file headers.
 - **Tool decision tree in rules** — activation rules now teach agents when to use `debug_perf`, `debug_visual`, `debug_capture wait:true`, and `debug_recall` — not just the core investigate/verify flow.
 
-### v0.11.0 — Live Activity Feed + `dbg` Alias
+### v0.11.0 — Live Activity Feed + `spdg` Alias
 - **Live activity feed** in serve terminal — see what the toolkit does for the agent in real time
 - File-based IPC (`activity.jsonl`) between MCP and serve processes
 - Session summary on verify-pass and cleanup (duration, outcome, captures, memory)
-- `dbg` CLI alias — short for `npx debug-toolkit`
+- `spdg` CLI alias — short for `npx stackpack-debug`
 - Removed redundant `install` command (integrations auto-install during setup)
 
 ### v0.10.0 — Memory Scaling + Integration Overhaul + Ghost OS
@@ -628,9 +628,9 @@ src/
 - Incremental index updates, staleness TTL cache, pattern detection cache
 - Deferred archival (1hr cooldown), physical purge to monthly archive files
 - Budget overflow guard with nuclear fallback
-- `dbg doctor` — environment health check
+- `spdg doctor` — environment health check
 - `debug_setup` MCP tool — check/install/connect/disconnect integrations
-- Guided interactive setup via `dbg` (TTY-aware)
+- Guided interactive setup via `spdg` (TTY-aware)
 - Capability-aware runtime adapts to what's installed
 - Dynamic SKILL.md capabilities table
 - `@modelcontextprotocol/sdk` added for MCP client capabilities

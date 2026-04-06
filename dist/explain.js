@@ -1,5 +1,5 @@
 /**
- * explain.ts — Decision explainability for debug-toolkit.
+ * explain.ts — Decision explainability for stackpack-debug.
  *
  * Generates human-readable explanations for:
  * - Why triage classified an error at a given complexity level

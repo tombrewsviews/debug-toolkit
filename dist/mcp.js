@@ -148,7 +148,7 @@ function collapseRepeats(lines) {
 }
 function buildLiveStatus(cwd, since) {
     const sections = [];
-    sections.push("# debug-toolkit — Live Situation Report\n");
+    sections.push("# stackpack-debug — Live Situation Report\n");
     // Read from live context file (written by serve process)
     const live = readLiveContext(cwd);
     // Also try local ring buffers (if MCP is co-located with serve, e.g. tests)
@@ -190,7 +190,7 @@ function buildLiveStatus(cwd, since) {
     }
     if (!hasLive && !hasLocal) {
         sections.push("**Dev server not running or not capturing.**\n");
-        sections.push("Start with: `npx debug-toolkit serve -- <your dev command>`\n");
+        sections.push("Start with: `npx stackpack-debug serve -- <your dev command>`\n");
         // Still provide what we can — static analysis and git
         const tscErrors = runQuickTsc(cwd);
         if (tscErrors.length > 0) {
@@ -451,11 +451,11 @@ function appendSessions(sections, cwd) {
     sections.push("");
 }
 export function createMcpServer() {
-    const server = new McpServer({ name: "debug-toolkit", version: getPackageVersion() }, { capabilities: { tools: {}, resources: {} } });
+    const server = new McpServer({ name: "stackpack-debug", version: getPackageVersion() }, { capabilities: { tools: {}, resources: {} } });
     // ━━━ RESOURCE: debug_methodology ━━━
     // Always-available debugging methodology. The "hot memory" tier.
     server.registerResource("debug_methodology", "debug://methodology", {
-        description: "The debugging methodology — how to use debug-toolkit effectively. Read this before your first debugging session.",
+        description: "The debugging methodology — how to use stackpack-debug effectively. Read this before your first debugging session.",
         mimeType: "text/markdown",
     }, async () => ({
         contents: [{ uri: "debug://methodology", mimeType: "text/markdown", text: METHODOLOGY }],
@@ -1400,7 +1400,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
                 error: "Lighthouse is not installed.",
                 setup: "npm install -g lighthouse",
                 chromeRequired: !envCaps.perf.chromeAvailable,
-                hint: "Run 'npx debug-toolkit doctor' to check your full setup.",
+                hint: "Run 'npx stackpack-debug doctor' to check your full setup.",
             });
         }
         const session = loadSession(cwd, sessionId);
@@ -1479,7 +1479,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
     });
     // ━━━ TOOL: debug_setup ━━━
     // Check and install integrations
-    server.tool("debug_setup", "Check available integrations and install missing ones. Actions: check = list status, install = install integration, connect = connect Ghost OS, disconnect = disconnect Ghost OS, check-update = check for newer version, update = update debug-toolkit to latest.", {
+    server.tool("debug_setup", "Check available integrations and install missing ones. Actions: check = list status, install = install integration, connect = connect Ghost OS, disconnect = disconnect Ghost OS, check-update = check for newer version, update = update stackpack-debug to latest.", {
         action: z.enum(["check", "install", "connect", "disconnect", "check-update", "update"]).describe("check = list status, install = install an integration, connect/disconnect = Ghost OS, check-update = check for newer version, update = update to latest"),
         integration: z.string().optional().describe("Integration id to install: lighthouse, chrome, ghost-os"),
     }, async ({ action, integration }) => {
@@ -1501,7 +1501,7 @@ Requires Chrome installed. Gracefully skips if unavailable.`,
                     ? "Updated successfully. Restart Claude Code to use the new version."
                     : result.success
                         ? "Already on latest version."
-                        : "Update failed. Try manually: npx -y debug-toolkit@latest",
+                        : "Update failed. Try manually: npx -y stackpack-debug@latest",
             });
         }
         if (action === "connect") {

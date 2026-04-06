@@ -59,7 +59,7 @@ export async function connectToGhostOs() {
             args: ["mcp"], // Ghost OS MCP mode
         });
         ghostClient = new Client({
-            name: "debug-toolkit",
+            name: "stackpack-debug",
             version: getPackageVersion(),
         });
         await ghostClient.connect(ghostTransport);

@@ -1,11 +1,11 @@
 {
-  "name": "debug-toolkit",
-  "version": "0.17.2",
+  "name": "stackpack-debug",
+  "version": "0.18.0",
   "description": "Closed-loop debugging toolkit for AI coding agents",
   "type": "module",
   "bin": {
-    "debug-toolkit": "./dist/index.js",
-    "dbg": "./dist/index.js"
+    "stackpack-debug": "./dist/index.js",
+    "spdg": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc && cp src/injected.js dist/injected.js",
@@ -27,7 +27,8 @@
     "debugging",
     "ai",
     "mcp",
-    "developer-tools"
+    "developer-tools",
+    "stackpack"
   ],
   "repository": {
     "type": "git",

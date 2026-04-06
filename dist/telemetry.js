@@ -84,6 +84,39 @@ export function recordOutcome(cwd, outcome) {
     }
     recomputeAggregates(store);
     atomicWrite(telemetryPath(cwd), JSON.stringify(store, null, 2));
+    // Optional: report to StackPack Monitor for cross-product visibility
+    reportToStackpack(outcome).catch(() => { });
+}
+async function reportToStackpack(outcome) {
+    const url = process.env.STACKPACK_EVENTS_URL;
+    const key = process.env.STACKPACK_API_KEY;
+    if (!url || !key)
+        return; // Graceful no-op when not configured
+    try {
+        await fetch(url, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+                product: "debug",
+                event_type: "session_outcome",
+                metadata: {
+                    sessionId: outcome.sessionId,
+                    errorType: outcome.errorType,
+                    category: outcome.category,
+                    outcome: outcome.outcome,
+                    durationMs: outcome.durationMs,
+                    triageLevel: outcome.triageLevel,
+                    toolsUsed: outcome.toolsUsed,
+                    files: outcome.files,
+                    memoryHit: outcome.memoryHit,
+                    memoryApplied: outcome.memoryApplied,
+                },
+            }),
+        });
+    }
+    catch {
+        // Silent — telemetry must never break debug
+    }
 }
 export function getTelemetry(cwd) {
     const store = loadTelemetry(cwd);

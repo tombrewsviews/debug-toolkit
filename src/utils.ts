@@ -27,16 +27,16 @@ export interface UpdateCheck {
 export function checkForUpdate(): UpdateCheck {
   const current = getPackageVersion();
   try {
-    const latest = execSync("npm view debug-toolkit version", { encoding: "utf-8", timeout: 5_000 }).trim();
+    const latest = execSync("npm view stackpack-debug version", { encoding: "utf-8", timeout: 5_000 }).trim();
     const updateAvailable = latest !== current && compareSemver(latest, current) > 0;
     return {
       current,
       latest,
       updateAvailable,
-      updateCommand: "npx -y debug-toolkit@latest",
+      updateCommand: "npx -y stackpack-debug@latest",
     };
   } catch {
-    return { current, latest: current, updateAvailable: false, updateCommand: "npx -y debug-toolkit@latest" };
+    return { current, latest: current, updateAvailable: false, updateCommand: "npx -y stackpack-debug@latest" };
   }
 }
 
@@ -54,9 +54,9 @@ export function runSelfUpdate(): { success: boolean; from: string; to: string; m
   const before = getPackageVersion();
   try {
     // Clear npx cache and re-fetch latest
-    execSync("npx -y debug-toolkit@latest --version", { encoding: "utf-8", timeout: 30_000, stdio: "pipe" });
+    execSync("npx -y stackpack-debug@latest --version", { encoding: "utf-8", timeout: 30_000, stdio: "pipe" });
     // Re-check what version we'd get now
-    const after = execSync("npm view debug-toolkit version", { encoding: "utf-8", timeout: 5_000 }).trim();
+    const after = execSync("npm view stackpack-debug version", { encoding: "utf-8", timeout: 5_000 }).trim();
     return {
       success: true,
       from: before,

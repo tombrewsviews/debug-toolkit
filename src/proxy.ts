@@ -9,7 +9,7 @@ import { createGunzip } from "node:zlib";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const INJECTED_SCRIPT_TAG = `<script src="/__debug_toolkit/injected.js"></script>`;
+const INJECTED_SCRIPT_TAG = `<script src="/__stackpack_debug/injected.js"></script>`;
 
 let injectedScriptCache: string | null = null;
 function getInjectedScript(): string {
@@ -90,14 +90,14 @@ export function startProxy(opts: ProxyOptions): {
   proxy.on("error", (err, _req, res) => {
     if (res && "writeHead" in res) {
       (res as ServerResponse).writeHead(502, { "Content-Type": "text/plain" });
-      (res as ServerResponse).end(`debug-toolkit proxy error: ${err.message}`);
+      (res as ServerResponse).end(`stackpack-debug proxy error: ${err.message}`);
     }
   });
 
   // HTTP server
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     // Serve our injected script
-    if (req.url === "/__debug_toolkit/injected.js") {
+    if (req.url === "/__stackpack_debug/injected.js") {
       try {
         const script = getInjectedScript();
         res.writeHead(200, {
@@ -132,7 +132,7 @@ export function startProxy(opts: ProxyOptions): {
 
   server.on("upgrade", (req, socket, head) => {
     // Our debug WebSocket
-    if (req.url === "/__debug_toolkit/ws") {
+    if (req.url === "/__stackpack_debug/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
       });

@@ -2,7 +2,7 @@
   "use strict";
 
   var wsUrl =
-    "ws://" + location.hostname + ":" + location.port + "/__debug_toolkit/ws";
+    "ws://" + location.hostname + ":" + location.port + "/__stackpack_debug/ws";
   var ws;
   var queue = [];
   var reconnectAttempts = 0;
