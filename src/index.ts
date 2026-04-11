@@ -15,6 +15,7 @@ import { exportPack, importPack } from "./packs.js";
 import { installHook, uninstallHook } from "./hook.js";
 import { cleanupFromManifest } from "./cleanup.js";
 import { startActivityFeed } from "./activity.js";
+import { startLoopWatcher } from "./watcher.js";
 import { banner, info, success, warn, error, dim, section, kv, printHelp, sym, c, select, spinner, type SelectOption } from "./cli.js";
 import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration, type EnvironmentCapabilities } from "./adapters.js";
 import { checkForUpdate, getPackageVersion } from "./utils.js";
@@ -1020,9 +1021,15 @@ async function main(): Promise<void> {
       // Live context writer — writes .debug/live-context.json every 5s for MCP to read
       const liveContextWriter = startLiveContextWriter(cwd);
 
+      // Loop watcher — monitors live context for error patterns and alerts the user
+      // This is what makes stackpack-debug useful even when a closed agent (Lovable, Bolt)
+      // is editing the code: the user sees loop warnings in this terminal
+      const loopWatcher = startLoopWatcher(cwd);
+
       const cleanup = () => {
         activityFeed.stop();
         liveContextWriter.stop();
+        loopWatcher.stop();
         if (child.pid) treeKill(child.pid, "SIGTERM");
         proxyHandle?.close();
       };
