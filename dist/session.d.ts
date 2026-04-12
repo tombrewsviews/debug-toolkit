@@ -75,6 +75,17 @@ export interface DebugSession {
     visualContext: VisualContext | null;
     perfSnapshots: PerfSnapshot[];
     _markerIndex: Record<string, string>;
+    _recalledEntryIds?: string[];
+    _recalledFiles?: string[];
+    _memoryHit?: boolean;
+    failedApproaches?: string[];
+    errorTrajectory?: Array<{
+        timestamp: string;
+        fingerprint: string;
+        errorType: string;
+        sourceFile: string | null;
+        afterAction: string | null;
+    }>;
 }
 export declare const MAX_FILE_SIZE: number;
 export declare function createSession(cwd: string, problem: string): DebugSession;

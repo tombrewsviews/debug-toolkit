@@ -396,12 +396,18 @@ export function classifyError(raw: string): ErrorClassification {
     [/Cannot find module/i, "dependency", "error", "Run `npm install` to install missing dependencies"],
     [/ERR_MODULE_NOT_FOUND/i, "esm", "error", "Add .js extension to import or set type:module in package.json"],
     [/EACCES|Permission denied/i, "permissions", "error", "Check file permissions or run with elevated privileges"],
+    [/AI_APICallError|APICallError/i, "ai-sdk-error", "error", "AI SDK API call failed — check provider URL, API key, and rate limits. Look for statusCode and responseBody in the full error."],
+    [/\b429\b|rate.?limit/i, "rate-limit", "error", "API rate limit — check which provider is being called and consider switching to a fallback or adding backoff"],
+    [/\b408\b|ETIMEDOUT|request.*timeout/i, "timeout", "error", "Request timed out — service may be slow or unreachable"],
     [/\b401\b/, "auth", "error", "Authentication failed — token may be expired"],
     [/\b403\b/, "authz", "error", "Permission denied — check authorization"],
     [/\b404\b/, "not-found", "error", "Endpoint doesn't exist — check the URL path"],
     [/\b5\d{2}\b/, "server", "error", "Server error — check the backend logs"],
     [/out of memory|heap/i, "memory", "fatal", "Process ran out of memory — check for leaks or increase limit"],
     [/SIGKILL|SIGTERM/i, "killed", "fatal", "Process was killed — may be OOM or timeout"],
+    // State/persistence patterns
+    [/override\s+is\s+null|setting\s+not\s+found|config(?:uration)?\s+(?:reset|lost|missing|not\s+(?:found|saved|persisted))/i, "state-persistence", "warning", "Configuration may not be persisted — check if settings are stored in a database/file or only in-memory (resets on server restart)"],
+    [/default\s+(?:value|provider|config)\s+used|fall(?:ing)?\s*back\s+to\s+default/i, "state-fallback", "warning", "Falling back to defaults — the user's configuration may not have been loaded. Check persistence layer."],
   ];
 
   for (const [pat, cat, sev, sugg] of rules) {
@@ -425,6 +431,154 @@ export function classifyError(raw: string): ErrorClassification {
   }
 
   return r;
+}
+
+// --- Error chain unwrapping ---
+
+export interface UnwrappedError {
+  outerMessage: string;
+  innerErrors: Array<{ wrapper: string; message: string; attempts?: number }>;
+  httpStatus: number | null;
+  url: string | null;
+  provider: string | null;
+}
+
+/** Extract diagnostic info from wrapped/chained errors (RetryError, AI SDK, etc.) */
+export function unwrapErrorChain(raw: string): UnwrappedError {
+  const result: UnwrappedError = {
+    outerMessage: raw.split("\n")[0] ?? "",
+    innerErrors: [],
+    httpStatus: null,
+    url: null,
+    provider: null,
+  };
+
+  // AI SDK RetryError pattern
+  const retryMatch = raw.match(/Failed after (\d+) attempts?\. Last error: (.+)/);
+  if (retryMatch) {
+    result.innerErrors.push({ wrapper: "RetryError", attempts: parseInt(retryMatch[1]), message: retryMatch[2] });
+  }
+
+  // "Caused by:" chain (Rust-style and general)
+  for (const m of raw.matchAll(/Caused by:\s*(.+)/gi)) {
+    result.innerErrors.push({ wrapper: "CausedBy", message: m[1].trim() });
+  }
+
+  // HTTP status codes anywhere in the error
+  const statusMatch = raw.match(/statusCode:\s*(\d{3})|status[:\s]+(\d{3})|HTTP\/\d\.\d\s+(\d{3})/);
+  if (statusMatch) {
+    result.httpStatus = parseInt(statusMatch[1] ?? statusMatch[2] ?? statusMatch[3]);
+  }
+
+  // URL extraction (API endpoint that was called)
+  const urlMatch = raw.match(/url:\s*['"]?(https?:\/\/[^\s'"]+)/);
+  if (urlMatch) {
+    result.url = urlMatch[1];
+    if (/anthropic\.com/i.test(result.url)) result.provider = "anthropic";
+    else if (/openai\.com/i.test(result.url)) result.provider = "openai";
+    else if (/googleapis\.com.*generativelanguage/i.test(result.url)) result.provider = "google";
+    else if (/localhost|127\.0\.0\.1/i.test(result.url)) result.provider = "local";
+  }
+
+  // Rate limit detection
+  if (result.httpStatus === 429 || /rate.?limit/i.test(raw)) {
+    result.innerErrors.push({ wrapper: "RateLimit", message: "API rate limit exceeded" });
+  }
+
+  // Connection refused
+  if (/ECONNREFUSED/i.test(raw)) {
+    const portMatch = raw.match(/ECONNREFUSED.*?:(\d+)/);
+    result.innerErrors.push({ wrapper: "ConnectionRefused", message: `Service not running on port ${portMatch?.[1] ?? "unknown"}` });
+  }
+
+  return result;
+}
+
+// --- Visual error detection ---
+
+// --- Provider/endpoint mismatch detection ---
+
+export interface ProviderMismatch {
+  expected: string | null;
+  actual: string;
+  actualUrl: string;
+  signal: string;
+}
+
+const PROVIDER_ENDPOINTS: Array<[RegExp, string]> = [
+  [/anthropic\.com/i, "anthropic"],
+  [/openai\.com/i, "openai"],
+  [/googleapis\.com.*generativelanguage/i, "google"],
+  [/localhost:\d{4,5}\/v1\//i, "local/ollama"],
+  [/together\.ai/i, "together"],
+  [/groq\.com/i, "groq"],
+];
+
+function inferProvider(url: string): string | null {
+  for (const [pat, name] of PROVIDER_ENDPOINTS) {
+    if (pat.test(url)) return name;
+  }
+  return null;
+}
+
+/**
+ * Detect provider/endpoint mismatches from browser network events and error chain.
+ * Looks for signals that the app is hitting a different provider than expected.
+ */
+export function detectProviderMismatch(
+  errorChain: UnwrappedError,
+  browserNetworkEvents: Array<{ url?: string; status?: number; method?: string; ok?: boolean }>,
+  errorText: string,
+): ProviderMismatch | null {
+  // Check 1: Error chain has a URL — does the error text mention a different provider?
+  if (errorChain.url && errorChain.provider) {
+    const mentionsOllama = /ollama|localhost.*11434/i.test(errorText);
+    const mentionsLocal = /local.*provider|provider.*local/i.test(errorText);
+    if ((mentionsOllama || mentionsLocal) && errorChain.provider !== "local") {
+      return {
+        expected: "local/ollama",
+        actual: errorChain.provider,
+        actualUrl: errorChain.url,
+        signal: "Error text mentions Ollama/local but request went to " + errorChain.provider,
+      };
+    }
+  }
+
+  // Check 2: Browser network shows API calls to unexpected endpoints
+  const apiCalls = browserNetworkEvents.filter(e => e.url && inferProvider(e.url));
+  const failedApiCalls = apiCalls.filter(e => e.status && e.status >= 400);
+  const providers = new Set(apiCalls.map(e => inferProvider(e.url!)).filter(Boolean));
+
+  // If we see both local and remote providers, and the remote one is failing, flag it
+  if (providers.has("local/ollama") && failedApiCalls.length > 0) {
+    for (const call of failedApiCalls) {
+      const prov = inferProvider(call.url!);
+      if (prov && prov !== "local/ollama") {
+        return {
+          expected: "local/ollama",
+          actual: prov,
+          actualUrl: call.url!,
+          signal: `App is calling ${prov} (${call.status}) while also using local/ollama — possible provider misconfiguration`,
+        };
+      }
+    }
+  }
+
+  // Check 3: All API calls going to a single unexpected provider with errors
+  if (failedApiCalls.length > 0 && providers.size === 1) {
+    const prov = [...providers][0]!;
+    const allFailing = failedApiCalls.length === apiCalls.filter(e => inferProvider(e.url!) === prov).length;
+    if (allFailing && errorChain.httpStatus === 429) {
+      return {
+        expected: null,
+        actual: prov,
+        actualUrl: failedApiCalls[0].url!,
+        signal: `All requests to ${prov} are rate-limited (429) — is this the intended provider?`,
+      };
+    }
+  }
+
+  return null;
 }
 
 // --- Visual error detection ---

@@ -14,6 +14,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSy
 import { dirname, join, resolve } from "node:path";
 import { computeConfidence, ARCHIVE_THRESHOLD } from "./confidence.js";
 import { memoryPath, walPath, archiveDirPath, atomicWrite, tokenize } from "./utils.js";
+import { signatureFromError } from "./signature.js";
 const indexCacheMap = new Map();
 const MAX_CACHED_PROJECTS = 5;
 let storeGeneration = 0;
@@ -112,6 +113,10 @@ function replayWal(store, mutations) {
             case "increment_recalled":
                 if (entry)
                     entry.timesRecalled = (entry.timesRecalled ?? 0) + 1;
+                break;
+            case "increment_used":
+                if (entry)
+                    entry.timesUsed = (entry.timesUsed ?? 0) + 1;
                 break;
             case "archive":
                 if (entry)
@@ -431,10 +436,13 @@ export function remember(cwd, entry) {
         entry.rootCause?.fixDescription ?? "",
     ].join(" ");
     const keywords = [...new Set(tokenize(allText))];
+    // Compute normalized error signature for cross-session deduplication
+    const errorSignature = signatureFromError(entry.problem, entry.files[0] ?? null);
     const full = {
         ...entry,
         keywords,
         gitSha: getGitSha(cwd),
+        errorSignature,
         rootCause: entry.rootCause ?? null,
         timesRecalled: 0,
         timesUsed: 0,
@@ -450,6 +458,24 @@ export function remember(cwd, entry) {
     return full;
 }
 /**
+ * Mark memory entries as "used" — the recalled fix was actually applied.
+ * Closes the feedback loop: timesUsed feeds into confidence scoring.
+ */
+export function markUsed(cwd, entryIds) {
+    const store = loadStore(cwd);
+    for (const id of entryIds) {
+        const entry = store.entries.find((e) => e.id === id);
+        if (entry) {
+            entry.timesUsed = (entry.timesUsed ?? 0) + 1;
+            appendWal(cwd, {
+                op: "increment_used",
+                entryId: id,
+                ts: new Date().toISOString(),
+            });
+        }
+    }
+}
+/**
  * Search past debug sessions for similar errors.
  * Returns matches ranked by confidence * relevance, with staleness info and causal chains.
  */
@@ -460,6 +486,8 @@ export function recall(cwd, query, limit = 5) {
     const queryTokens = tokenize(query);
     if (queryTokens.length === 0)
         return [];
+    // Compute query signature for direct matching (primary key)
+    const querySig = signatureFromError(query, null);
     const now = Date.now();
     const index = getIndex(cwd, store);
     // Build candidate set using inverted index: map entryId → hit count
@@ -474,6 +502,12 @@ export function recall(cwd, query, limit = 5) {
             }
         }
     }
+    // Also include signature matches that keyword search may have missed
+    for (const e of store.entries) {
+        if (!e.archived && e.errorSignature === querySig && !hitCounts.has(e.id)) {
+            hitCounts.set(e.id, queryTokens.length); // full relevance for signature match
+        }
+    }
     // Build a lookup map for quick entry access
     const entryById = new Map();
     for (const e of store.entries) {
@@ -484,7 +518,9 @@ export function recall(cwd, query, limit = 5) {
         const entry = entryById.get(id);
         if (!entry || entry.archived)
             continue;
-        const relevance = hits / queryTokens.length;
+        // Signature match gets a 2x relevance boost
+        const sigBoost = entry.errorSignature === querySig ? 2.0 : 1.0;
+        const relevance = (hits / queryTokens.length) * sigBoost;
         const staleness = checkStaleness(cwd, entry);
         const ageInDays = (now - new Date(entry.timestamp).getTime()) / (1000 * 60 * 60 * 24);
         const confidence = computeConfidence({

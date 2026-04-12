@@ -21,8 +21,8 @@ import {
 } from "./session.js";
 import { instrumentFile } from "./instrument.js";
 import { cleanupSession } from "./cleanup.js";
-import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, discoverTauriLogs, drainBuildErrors, peekRecentOutput, readLiveContext, setLighthouseRunning, waitForNewOutput, extractFilePathsFromError, getTrackedProcesses, type LiveContext } from "./capture.js";
-import { investigate, isVisualError } from "./context.js";
+import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, discoverTauriLogs, drainBuildErrors, peekRecentOutput, peekRecentWindow, readLiveContext, setLighthouseRunning, waitForNewOutput, extractFilePathsFromError, getTrackedProcesses, type LiveContext } from "./capture.js";
+import { investigate, isVisualError, unwrapErrorChain, classifyError, detectProviderMismatch } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, markUsed, memoryStats, detectPatterns, maybeArchive, type CausalLink } from "./memory.js";
 import { triageError } from "./triage.js";
@@ -256,6 +256,15 @@ function buildLiveStatus(cwd: string, since?: { timestamp: string; terminalCount
         sections.push("```");
         for (const line of collapseRepeats(errors.slice(-30).map((t) => t.text))) sections.push(line);
         sections.push("```\n");
+        // Annotate errors with classification suggestions
+        const seen = new Set<string>();
+        for (const e of errors.slice(-10)) {
+          const c = classifyError(e.text);
+          if (c.category !== "runtime" && c.suggestion && !seen.has(c.category)) {
+            seen.add(c.category);
+            sections.push(`> **${c.category}**: ${c.suggestion}\n`);
+          }
+        }
       }
 
       // Application output — shows what's running, what loaded, what state the app is in
@@ -332,6 +341,32 @@ function buildLiveStatus(cwd: string, since?: { timestamp: string; terminalCount
         sections.push("```");
         for (const b of logs.slice(-30)) sections.push(formatBrowserEvent(b));
         sections.push("```\n");
+      }
+    }
+
+    // === RECENT API CALLS (endpoint visibility for provider debugging) ===
+    if (live.browser.length > 0) {
+      const networkEvents = live.browser.filter(b => b.source === "browser-network");
+      if (networkEvents.length > 0) {
+        sections.push("## Recent API Calls\n");
+        const deduped = new Map<string, { method: string; url: string; status: number | string; count: number }>();
+        for (const b of networkEvents.slice(-20)) {
+          const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
+          const url = String(d?.url ?? "");
+          const method = String(d?.method ?? "GET");
+          const status = d?.status ?? d?.error ?? "?";
+          const key = `${method} ${url} ${status}`;
+          const existing = deduped.get(key);
+          if (existing) { existing.count++; } else { deduped.set(key, { method, url, status: status as number | string, count: 1 }); }
+        }
+        for (const [, entry] of deduped) {
+          const statusStr = typeof entry.status === "number"
+            ? (entry.status >= 400 ? `**${entry.status}**` : `${entry.status}`)
+            : `**${entry.status}**`;
+          const countStr = entry.count > 1 ? ` (×${entry.count})` : "";
+          sections.push(`- ${entry.method} \`${entry.url}\` → ${statusStr}${countStr}`);
+        }
+        sections.push("");
       }
     }
 
@@ -726,7 +761,14 @@ Start every debugging session with this tool.`,
     const buildErrors = drainBuildErrors();
 
     // Auto-include recent runtime output from ring buffers (peek, don't drain)
-    const recentOutput = peekRecentOutput({ terminalLines: 30, browserLines: 20, buildErrors: 10 });
+    let recentOutput = peekRecentOutput({ terminalLines: 30, browserLines: 20, buildErrors: 10 });
+    // Fallback: if ring buffer is empty (e.g. drained by prior tool call), use immutable recent window
+    if (recentOutput.terminal.length === 0) {
+      const windowOutput = peekRecentWindow(10_000);
+      if (windowOutput.length > 0) {
+        recentOutput = { ...recentOutput, terminal: windowOutput.slice(-30) };
+      }
+    }
     const tauriLogs = readTauriLogs(cwd, 30);
 
     // Persist build errors as captures on the session so they survive the response
@@ -808,10 +850,23 @@ Start every debugging session with this tool.`,
     });
     saveSession(cwd, session);
 
+    // Unwrap error chains (RetryError, AI SDK wrappers, etc.)
+    const errorChain = unwrapErrorChain(errorText);
+    const hasChainInfo = errorChain.innerErrors.length > 0 || errorChain.httpStatus !== null || errorChain.url !== null;
+
+    // Detect provider/endpoint mismatch from browser network events
+    const browserNetworkEvents = recentOutput.browser
+      .filter(c => c.source === "browser-network")
+      .map(c => c.data as Record<string, unknown>)
+      .map(d => ({ url: d?.url as string | undefined, status: d?.status as number | undefined, method: d?.method as string | undefined, ok: d?.ok as boolean | undefined }));
+    const providerMismatch = detectProviderMismatch(errorChain, browserNetworkEvents, errorText);
+
     const response: Record<string, unknown> = {
       sessionId: session.id,
       triage: triage.level,
       error: result.error,
+      errorChain: hasChainInfo ? errorChain : undefined,
+      providerMismatch: providerMismatch ?? undefined,
       sourceCode: result.sourceCode.map((s) => ({
         file: s.relativePath,
         errorLine: s.errorLine,
@@ -931,6 +986,52 @@ Start every debugging session with this tool.`,
       response.nextStep = result.error.suggestion
         ? `Suggested fix: ${result.error.suggestion}`
         : "Use debug_instrument to add logging, then debug_capture to see the output.";
+    }
+
+    // Smart hint for wrapped/generic errors with no useful context
+    if (triage.level === "complex" && result.sourceCode.length === 0 && hasChainInfo) {
+      const hints: string[] = [
+        "This error appears to be wrapped by middleware or SDK error handling. The original cause is hidden.",
+      ];
+      if (errorChain.httpStatus) {
+        hints.push(`Detected HTTP ${errorChain.httpStatus}${errorChain.httpStatus === 429 ? " (rate limit)" : errorChain.httpStatus >= 500 ? " (server error)" : ""}`);
+      }
+      if (errorChain.url) {
+        hints.push(`Request went to: ${errorChain.url}${errorChain.provider ? ` (${errorChain.provider})` : ""}`);
+      }
+      if (errorChain.innerErrors.length > 0) {
+        hints.push(`Error chain: ${errorChain.innerErrors.map(e => e.wrapper).join(" → ")}`);
+      }
+      hints.push(
+        "Surface the full error object in the HTTP response: catch(e) { return Response.json({ error: e.message, details: JSON.stringify(e, Object.getOwnPropertyNames(e)) }, { status: 500 }) }",
+        "Or use debug_instrument to add tagged logging before the catch block",
+        "Use debug_capture with a curl command — check serverLogs for correlated server output",
+      );
+      response.wrappedErrorHint = hints;
+    }
+
+    // Configuration drift detection — provider mismatch signals
+    if (providerMismatch) {
+      response.configDrift = {
+        type: "provider-mismatch",
+        signal: providerMismatch.signal,
+        expected: providerMismatch.expected,
+        actual: providerMismatch.actual,
+        actualUrl: providerMismatch.actualUrl,
+        suggestions: [
+          "The app is hitting a different provider than expected. Check if the provider setting is persisted (database/file) or only stored in-memory.",
+          "If settings are in-memory (e.g., `let override = null`), they reset on every server restart or hot-reload.",
+          "Check: GET /api/providers/active (or similar settings endpoint) — does it return the expected provider?",
+          "Look for the settings save handler — does it write to a database, file, or just a variable?",
+          providerMismatch.expected === "local/ollama"
+            ? "User likely configured Ollama but the override was lost. Check if the provider resolution falls back to a default when the override is null."
+            : `Expected ${providerMismatch.expected ?? "unknown"} but got ${providerMismatch.actual}. Trace the provider resolution chain.`,
+        ],
+      };
+      // Prepend config drift warning to nextStep
+      response.nextStep = typeof response.nextStep === "string"
+        ? `⚠ CONFIGURATION DRIFT: ${providerMismatch.signal}. ${response.nextStep}`
+        : `⚠ CONFIGURATION DRIFT: ${providerMismatch.signal}`;
     }
 
     // Append team recall results if any
@@ -1204,9 +1305,11 @@ Supports JS/TS/Python/Go.`,
 1. Run a command and capture its output (e.g., 'npm test', 'curl localhost:3000')
 2. Drain buffered terminal/browser output from the dev server
 3. Wait for new output (wait=true) — blocks until new lines arrive or timeout
+4. Recent window (recent=<ms>) — read from immutable 60s buffer, immune to drain
 
 Returns tagged captures linked to hypotheses, plus any errors detected.
-Results are paginated — only the most recent captures are returned.`,
+Results are paginated — only the most recent captures are returned.
+When running commands against localhost, server-side logs from the request window are included in serverLogs.`,
     inputSchema: {
       sessionId: z.string().optional().describe("Existing session ID, or omit to read output without a session"),
       command: z.string().optional().describe("Command to run (e.g., 'npm test')"),
@@ -1216,8 +1319,9 @@ Results are paginated — only the most recent captures are returned.`,
       source: z.enum(["terminal", "browser", "all"]).optional().describe("Filter by source (default: all)"),
       filter: z.string().optional().describe("Text pattern to match (e.g., 'SCROLL-DEBUG', 'error')"),
       level: z.enum(["error", "warn", "all"]).optional().describe("Filter by log level"),
+      recent: z.number().optional().describe("Read from immutable recent window (last N ms, max 60000). Immune to buffer drain — use when normal capture returns empty."),
     },
-  }, async ({ sessionId, command, limit, wait, waitTimeoutMs, source: sourceFilter, filter: textFilter, level: levelFilter }) => {
+  }, async ({ sessionId, command, limit, wait, waitTimeoutMs, source: sourceFilter, filter: textFilter, level: levelFilter, recent }) => {
     // Session is optional — auto-create only when running commands, otherwise work sessionless
     let session = sessionId ? loadSession(cwd, sessionId) : null;
     if (!session && command) {
@@ -1257,6 +1361,32 @@ Results are paginated — only the most recent captures are returned.`,
       return true;
     };
 
+    // Mode 4: Recent window (immutable, immune to drain)
+    if (recent && !command) {
+      const windowMs = Math.min(recent, 60_000);
+      const windowCaptures = peekRecentWindow(windowMs);
+      const filtered = windowCaptures.filter(matchesFilters);
+      const errors = filtered.filter((c) => {
+        const d = c.data as Record<string, string> | undefined;
+        return d?.stream === "stderr" || d?.text?.toLowerCase().includes("error");
+      });
+
+      logActivity({ tool: "debug_capture", ts: Date.now(), summary: `recent window ${windowMs}ms`, metrics: { total: filtered.length, errors: errors.length } });
+      return text({
+        sessionId: session?.id,
+        mode: "recent-window",
+        windowMs,
+        total: filtered.length,
+        output: filtered.slice(-(limit ?? 30)).map((c) => ({ source: c.source, data: c.data })),
+        errors: errors.slice(0, 10).map((c) => (c.data as Record<string, string>)?.text),
+        nextStep: filtered.length === 0
+          ? `No output in the last ${Math.round(windowMs / 1000)}s. The server may not be producing output.`
+          : errors.length > 0
+            ? "Errors found in recent window. Use debug_investigate with the error text."
+            : `${filtered.length} line(s) from the last ${Math.round(windowMs / 1000)}s.`,
+      });
+    }
+
     // Mode 3: Wait for new output (blocking poll)
     if (wait && !command) {
       const maxWait = Math.min(waitTimeoutMs ?? 30_000, 60_000);
@@ -1291,11 +1421,29 @@ Results are paginated — only the most recent captures are returned.`,
     }
 
     // Mode 1: Run command
+    let serverLogs: Array<{ timestamp: string; text: unknown }> | undefined;
     if (command && session) {
       const safe = validateCommand(command);
+      // Snapshot recent window before running command for localhost correlation
+      const isLocalRequest = /localhost|127\.0\.0\.1/i.test(safe);
+      const preTimestamp = isLocalRequest ? Date.now() : 0;
+
       const caps = await runAndCapture(safe, 30_000);
       session.captures.push(...caps);
       saveSession(cwd, session);
+
+      // Correlate server-side logs triggered by the request
+      if (isLocalRequest) {
+        // Small delay for server to flush logs
+        await new Promise(r => setTimeout(r, 250));
+        const recentServerOutput = peekRecentWindow(Date.now() - preTimestamp + 500);
+        if (recentServerOutput.length > 0) {
+          serverLogs = recentServerOutput.map(c => {
+            const d = typeof c.data === "object" && c.data !== null ? c.data as Record<string, unknown> : null;
+            return { timestamp: c.timestamp, text: d?.text ?? d?.data ?? String(c.data) };
+          });
+        }
+      }
     }
 
     // Mode 2: Drain/peek buffers
@@ -1319,13 +1467,16 @@ Results are paginated — only the most recent captures are returned.`,
         tagged: tagged.map((c) => ({ tag: c.markerTag, hypothesis: c.hypothesisId, data: c.data })),
         errors: errors.slice(0, 10).map((c) => (c.data as Record<string, string>)?.text),
         output: filtered.slice(0, 15).map((c) => ({ source: c.source, data: c.data })),
+        serverLogs: serverLogs && serverLogs.length > 0 ? serverLogs.slice(0, 20) : undefined,
         nextStep: errors.length > 0
           ? "Errors detected. Use debug_investigate with the error text for full context."
-          : tagged.length > 0
-            ? "Instrumented output captured. Review tagged data to confirm/reject hypotheses."
-            : recent.total === 0 && !command
-              ? "No output captured. Try debug_capture with wait=true, or run a command."
-              : "Output captured. Review the results.",
+          : serverLogs && serverLogs.length > 0
+            ? "Server-side logs captured from this request — check serverLogs for the full picture."
+            : tagged.length > 0
+              ? "Instrumented output captured. Review tagged data to confirm/reject hypotheses."
+              : recent.total === 0 && !command
+                ? "No output captured. Try debug_capture with wait=true, or run a command."
+                : "Output captured. Review the results.",
       });
     }
 

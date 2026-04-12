@@ -157,6 +157,26 @@ export const terminalBuffer = new RingBuffer<Capture>(500);
 export const browserBuffer = new RingBuffer<Capture>(200);
 export const buildBuffer = new RingBuffer<BuildError>(100);
 
+// --- Immutable recent window: last 60s of terminal output, immune to drain ---
+
+const RECENT_WINDOW_MS = 60_000;
+const recentWindow: Array<{ ts: number; capture: Capture }> = [];
+
+function pushRecentWindow(capture: Capture): void {
+  const now = Date.now();
+  recentWindow.push({ ts: now, capture });
+  // Evict entries older than 60s
+  while (recentWindow.length > 0 && now - recentWindow[0].ts > RECENT_WINDOW_MS) {
+    recentWindow.shift();
+  }
+}
+
+/** Read recent terminal output from the immutable window (never drained). */
+export function peekRecentWindow(lastMs?: number): Capture[] {
+  const cutoff = Date.now() - (lastMs ?? RECENT_WINDOW_MS);
+  return recentWindow.filter(e => e.ts >= cutoff).map(e => e.capture);
+}
+
 // --- Consecutive dedup tracking ---
 
 let lastTerminalText = "";
@@ -166,6 +186,8 @@ let lastBrowserText = "";
 let browserRepeatCount = 0;
 
 function pushTerminalDeduped(capture: Capture): void {
+  // Always push to immutable recent window (before dedup filtering)
+  pushRecentWindow(capture);
   const d = capture.data as Record<string, unknown> | null;
   const text = String(d?.text ?? d?.data ?? "");
   if (text === lastTerminalText && text.length > 0) {
@@ -432,6 +454,7 @@ export function setLighthouseRunning(running: boolean): void { lighthouseRunning
 export function onBrowserEvent(event: { type: string; data: unknown; ts: number }, context?: "webview" | "external"): void {
   const srcMap: Record<string, Capture["source"]> = {
     console: "browser-console", network: "browser-network", error: "browser-error",
+    "network-api": "browser-network",
   };
   const src = srcMap[event.type] ?? "browser-console";
   const str = typeof event.data === "object" ? JSON.stringify(event.data) : String(event.data);
@@ -455,9 +478,15 @@ export function onBrowserEvent(event: { type: string; data: unknown; ts: number 
 // --- Drain + link (O(n) using pre-built index, not O(n*m)) ---
 
 export function drainCaptures(cwd: string, session: DebugSession): Capture[] {
-  const all = [...terminalBuffer.drain(), ...browserBuffer.drain()];
+  // Use peek instead of drain to prevent data loss across tools.
+  // The ring buffer's natural rotation handles cleanup.
+  const all = [...terminalBuffer.peek(), ...browserBuffer.peek()];
 
-  for (const c of all) {
+  // Dedup against captures already in the session (by id)
+  const existingIds = new Set(session.captures.map(c => c.id));
+  const newCaptures = all.filter(c => !existingIds.has(c.id));
+
+  for (const c of newCaptures) {
     if (c.markerTag) {
       // O(1) lookup via pre-built index instead of O(m) scan
       const hypId = lookupHypothesis(session, c.markerTag);
@@ -469,9 +498,11 @@ export function drainCaptures(cwd: string, session: DebugSession): Capture[] {
     }
   }
 
-  session.captures.push(...all);
-  saveSession(cwd, session);
-  return all;
+  if (newCaptures.length > 0) {
+    session.captures.push(...newCaptures);
+    saveSession(cwd, session);
+  }
+  return newCaptures;
 }
 
 // --- Tauri log file discovery and reading ---

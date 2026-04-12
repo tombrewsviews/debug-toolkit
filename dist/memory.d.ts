@@ -19,7 +19,12 @@ export interface MemoryEntry {
     files: string[];
     keywords: string[];
     gitSha: string | null;
+    errorSignature?: string;
     rootCause: CausalLink | null;
+    failedApproaches?: string[];
+    fixPrompt?: string;
+    platform?: string;
+    fixMethodology?: string[];
     timesRecalled: number;
     timesUsed: number;
     archived: boolean;
@@ -61,10 +66,16 @@ export declare function saveStore(cwd: string, store: MemoryStore): void;
  * Save a completed debug session to memory.
  * Auto-captures the current git SHA for staleness tracking.
  */
-export declare function remember(cwd: string, entry: Omit<MemoryEntry, "keywords" | "gitSha" | "rootCause" | "timesRecalled" | "timesUsed" | "archived" | "source"> & {
+export declare function remember(cwd: string, entry: Omit<MemoryEntry, "keywords" | "gitSha" | "errorSignature" | "rootCause" | "timesRecalled" | "timesUsed" | "archived" | "source"> & {
     rootCause?: CausalLink | null;
+    failedApproaches?: string[];
     source?: "local" | "external";
 }): MemoryEntry;
+/**
+ * Mark memory entries as "used" — the recalled fix was actually applied.
+ * Closes the feedback loop: timesUsed feeds into confidence scoring.
+ */
+export declare function markUsed(cwd: string, entryIds: string[]): void;
 /**
  * Search past debug sessions for similar errors.
  * Returns matches ranked by confidence * relevance, with staleness info and causal chains.

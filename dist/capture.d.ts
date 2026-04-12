@@ -25,6 +25,8 @@ declare class RingBuffer<T> {
 export declare const terminalBuffer: RingBuffer<Capture>;
 export declare const browserBuffer: RingBuffer<Capture>;
 export declare const buildBuffer: RingBuffer<BuildError>;
+/** Read recent terminal output from the immutable window (never drained). */
+export declare function peekRecentWindow(lastMs?: number): Capture[];
 /**
  * Peek at recent terminal + browser + build output WITHOUT draining.
  * Used by debug_investigate to auto-include runtime context.

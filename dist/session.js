@@ -69,6 +69,17 @@ export function loadSession(cwd, sessionId) {
             }
         }
     }
+    // Backwards compat: initialize new fields for old session files
+    if (!session.failedApproaches)
+        session.failedApproaches = [];
+    if (!session.errorTrajectory)
+        session.errorTrajectory = [];
+    if (!session._recalledEntryIds)
+        session._recalledEntryIds = [];
+    if (!session._recalledFiles)
+        session._recalledFiles = [];
+    if (session._memoryHit === undefined)
+        session._memoryHit = false;
     return session;
 }
 // --- Marker index ---

@@ -84,8 +84,12 @@
     });
   });
 
-  // --- Network failure capture (fetch) ---
+  // --- Network capture (fetch) ---
+  // Track API calls for provider/endpoint visibility, not just failures
   var origFetch = window.fetch;
+  function isApiCall(url) {
+    return /\/api\/|anthropic\.com|openai\.com|localhost:\d{4,5}\/v1\//i.test(url);
+  }
   window.fetch = function () {
     var args = arguments;
     var url = String(args[0] && args[0].url ? args[0].url : args[0]);
@@ -93,15 +97,37 @@
       (args[1] && args[1].method) ||
       (args[0] && args[0].method) ||
       "GET";
+    var trackThis = isApiCall(url);
 
     return origFetch.apply(this, args).then(
       function (res) {
         if (!res.ok) {
-          send("network", {
+          // For errors, try to capture response body snippet
+          var cloned = res.clone();
+          cloned.text().then(function (body) {
+            var snippet = body.length > 500 ? body.slice(0, 500) + "..." : body;
+            send("network", {
+              url: url,
+              method: method,
+              status: res.status,
+              statusText: res.statusText,
+              responseSnippet: snippet,
+            });
+          }).catch(function () {
+            send("network", {
+              url: url,
+              method: method,
+              status: res.status,
+              statusText: res.statusText,
+            });
+          });
+        } else if (trackThis) {
+          // Track successful API calls for endpoint visibility
+          send("network-api", {
             url: url,
             method: method,
             status: res.status,
-            statusText: res.statusText,
+            ok: true,
           });
         }
         return res;
@@ -117,7 +143,7 @@
     );
   };
 
-  // --- Network failure capture (XMLHttpRequest) ---
+  // --- Network capture (XMLHttpRequest) ---
   var origOpen = XMLHttpRequest.prototype.open;
   var origSend = XMLHttpRequest.prototype.send;
 
@@ -136,6 +162,13 @@
           method: self._dbg_method,
           status: self.status,
           statusText: self.statusText,
+        });
+      } else if (isApiCall(self._dbg_url)) {
+        send("network-api", {
+          url: self._dbg_url,
+          method: self._dbg_method,
+          status: self.status,
+          ok: true,
         });
       }
     });

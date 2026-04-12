@@ -238,6 +238,8 @@ spdg   # setup only, agent calls tools manually
 | Performance metrics | `debug_perf` | Slow page loads, layout shifts |
 | Visual/layout state | `debug_visual` | Overlap, misalignment, CSS bugs |
 | Long-running output | `debug_capture` with `wait: true` | Async ops, build processes, generation tasks |
+| Server-side logs for a request | `debug_capture` with `command: "curl ..."` | Localhost requests — includes correlated `serverLogs` |
+| Recent output (drain-safe) | `debug_capture` with `recent: 10000` | When normal capture returns empty, or after prior drain |
 | Past solutions | `debug_recall` | Recurring errors |
 
 For complex or multi-signal bugs, use `/debug-all` — runs all diagnostic tools in parallel for maximum coverage.
@@ -328,6 +330,9 @@ Activity feed output (in your terminal while the agent debugs):
 **Start here.** Give it an error message or stack trace. Returns:
 
 - Error classification (type, category, severity, suggestion)
+- Error chain unwrapping (RetryError, AI SDK wrappers — extracts HTTP status, URL, provider)
+- Provider/endpoint mismatch detection (flags when the app hits a different provider than expected)
+- Configuration drift hints (suggests checking persistence when settings may have been lost)
 - Source code at the exact crash site (highlighted)
 - Git context (branch, commit, recent changes to those files)
 - Runtime environment (Node/Rust version, frameworks, env vars — secrets redacted)
@@ -387,11 +392,12 @@ Pass `condition: "value === null"` to wrap the log in an `if` block — no spam 
 
 ### debug_capture
 
-Three modes:
+Four modes:
 
-1. **Run a command** — `{ command: "npm test" }` — captures stdout/stderr
-2. **Drain buffers** — `{}` — snapshot of buffered terminal/browser/Tauri log events
+1. **Run a command** — `{ command: "npm test" }` — captures stdout/stderr. When the command targets `localhost`, correlated server-side logs are included in the `serverLogs` field.
+2. **Peek buffers** — `{}` — snapshot of buffered terminal/browser/Tauri log events (non-destructive — safe to call multiple times)
 3. **Wait for output** — `{ wait: true }` — blocks until new output arrives (up to 60s)
+4. **Recent window** — `{ recent: 10000 }` — reads from an immutable 60-second buffer that survives buffer rotation. Use when normal capture returns empty.
 
 Wait mode is designed for long-running processes (image generation, builds, async operations) where the agent would otherwise poll `debug://status` repeatedly. Tagged output is linked to hypotheses. Results are paginated.
 
@@ -514,7 +520,7 @@ stackpack-debug learns from every session. The memory system is designed to scal
 ## Testing
 
 ```bash
-npm test                    # 79 tests across 19 files
+npm test                    # 77 tests across 19 files
 npm run test:watch          # watch mode
 spdg demo     # full workflow with real bug
 spdg doctor   # verify environment setup
@@ -593,6 +599,20 @@ src/
 ```
 
 ## Changelog
+
+### v0.19.0 — Diagnostic Reliability + Configuration Awareness
+
+- **Immutable recent window** — 60-second append-only buffer captures all terminal output before dedup. Immune to buffer drain, so server-side logs are never lost between tool calls. Exposed via `debug_capture` `recent` parameter.
+- **Non-destructive buffer reads** — `debug_capture` default mode uses `peek()` instead of `drain()`, preventing data loss across sequential tool calls. Session-level dedup prevents re-adding entries.
+- **Error chain unwrapping** — `debug_investigate` recursively unwraps `RetryError`, `AI_APICallError`, `CausedBy` chains. Extracts `httpStatus`, `url`, `provider`, and `responseBody` from nested errors that would otherwise show as `"Error"`.
+- **Provider mismatch detection** — cross-references error chain URLs with browser network events to detect when the app is hitting the wrong provider (e.g., Anthropic instead of Ollama). Surfaces `providerMismatch` and `configDrift` fields with actionable suggestions.
+- **Request-response correlation** — when `debug_capture` runs a command against `localhost`, it captures server-side logs generated during that request window and includes them as `serverLogs` in the response.
+- **Recent API calls in status** — `debug://status` now shows a "Recent API Calls" section with method, URL, and status for all browser API requests, giving immediate visibility into what endpoints the app is hitting.
+- **Error annotations in status** — terminal errors are now classified inline with suggestions (e.g., "rate-limit: API rate limit — check which provider...").
+- **Enhanced network capture** — browser capture script now tracks all API calls (not just failures) to `/api/`, provider endpoints, and local servers. Error responses include response body snippets (up to 500 chars).
+- **New `classifyError` rules** — `429/rate-limit`, `AI_APICallError`, `ETIMEDOUT`, state persistence patterns (`override is null`, `configuration reset`, `falling back to default`).
+- **Smart triage hints** — when triage is "complex" with wrapped errors, provides specific debugging suggestions including provider info, HTTP status, and error chain visualization.
+- **Updated agent rules** — new sections for debugging wrapped/generic errors, empty terminal output recovery, and configuration/state bugs with hypothesis generation guidance.
 
 ### v0.15.0 — Session Intelligence + Tauri Deep Integration
 - **Budget-protected past solutions** — `pastSolutions`, `proactiveSuggestion`, and `sourceCode` are now preserved during token budget compression. Top solution diagnosis inlined in `nextStep` so it survives even aggressive compression.

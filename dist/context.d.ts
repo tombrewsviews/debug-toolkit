@@ -49,6 +49,35 @@ export interface ErrorClassification {
     suggestion: string;
 }
 export declare function classifyError(raw: string): ErrorClassification;
+export interface UnwrappedError {
+    outerMessage: string;
+    innerErrors: Array<{
+        wrapper: string;
+        message: string;
+        attempts?: number;
+    }>;
+    httpStatus: number | null;
+    url: string | null;
+    provider: string | null;
+}
+/** Extract diagnostic info from wrapped/chained errors (RetryError, AI SDK, etc.) */
+export declare function unwrapErrorChain(raw: string): UnwrappedError;
+export interface ProviderMismatch {
+    expected: string | null;
+    actual: string;
+    actualUrl: string;
+    signal: string;
+}
+/**
+ * Detect provider/endpoint mismatches from browser network events and error chain.
+ * Looks for signals that the app is hitting a different provider than expected.
+ */
+export declare function detectProviderMismatch(errorChain: UnwrappedError, browserNetworkEvents: Array<{
+    url?: string;
+    status?: number;
+    method?: string;
+    ok?: boolean;
+}>, errorText: string): ProviderMismatch | null;
 /**
  * Determine if an error is visual/CSS-related, warranting screenshot capture.
  */

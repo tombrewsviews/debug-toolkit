@@ -13,6 +13,10 @@ import { exportPack, importPack } from "./packs.js";
 import { installHook, uninstallHook } from "./hook.js";
 import { cleanupFromManifest } from "./cleanup.js";
 import { startActivityFeed } from "./activity.js";
+import { startLoopWatcher } from "./watcher.js";
+import { generateCaptureScript, listPlatforms } from "./browser-capture.js";
+import { startCaptureServer } from "./capture-server.js";
+import { getOpenIssues, getIssue, solveIssue, listFixPrompts } from "./fix-library.js";
 import { banner, info, success, warn, error, dim, section, kv, printHelp, sym, c, select, spinner } from "./cli.js";
 import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration } from "./adapters.js";
 import { checkForUpdate } from "./utils.js";
@@ -20,11 +24,17 @@ import { checkForUpdate } from "./utils.js";
 function parseArgs(argv) {
     const args = argv.slice(2);
     const cmd = args[0] ?? "mcp"; // DEFAULT: pure MCP server (zero-config!)
-    if (["clean", "init", "uninstall", "doctor", "demo", "help", "--help", "-h", "mcp", "export", "import", "update"].includes(cmd)) {
-        return { command: cmd.replace(/^-+/, ""), port: null, childCommand: [] };
+    if (["clean", "init", "uninstall", "doctor", "demo", "help", "--help", "-h", "mcp", "export", "import", "update", "watch"].includes(cmd)) {
+        return { command: cmd.replace(/^-+/, ""), port: null, childCommand: [], flags: args.slice(1) };
+    }
+    if (cmd === "setup") {
+        return { command: "setup", port: null, childCommand: [], flags: args.slice(1) };
+    }
+    if (cmd === "fix") {
+        return { command: "fix", port: null, childCommand: [], flags: args.slice(1) };
     }
     if (cmd !== "serve")
-        return { command: "mcp", port: null, childCommand: [] };
+        return { command: "mcp", port: null, childCommand: [], flags: [] };
     let port = null;
     const child = [];
     let past = false;
@@ -984,9 +994,14 @@ async function main() {
             const activityFeed = startActivityFeed(cwd);
             // Live context writer — writes .debug/live-context.json every 5s for MCP to read
             const liveContextWriter = startLiveContextWriter(cwd);
+            // Loop watcher — monitors live context for error patterns and alerts the user
+            // This is what makes stackpack-debug useful even when a closed agent (Lovable, Bolt)
+            // is editing the code: the user sees loop warnings in this terminal
+            const loopWatcher = startLoopWatcher(cwd);
             const cleanup = () => {
                 activityFeed.stop();
                 liveContextWriter.stop();
+                loopWatcher.stop();
                 if (child.pid)
                     treeKill(child.pid, "SIGTERM");
                 proxyHandle?.close();
@@ -998,6 +1013,253 @@ async function main() {
                 proxyHandle?.close();
                 process.exit(code ?? 0);
             });
+            break;
+        }
+        case "watch": {
+            // Standalone watcher — no dev server, just monitors .debug/live-context.json
+            // Use when the dev server is already running (or a closed agent is running it)
+            banner();
+            section("Watch Mode");
+            info("Monitoring for errors and loops. Press Ctrl+C to stop.");
+            dim("Errors are captured from .debug/live-context.json and the browser capture server.");
+            // Start the browser capture server so console scripts can send events
+            const capturePort = 3100;
+            const captureServer = startCaptureServer({
+                port: capturePort,
+                cwd,
+                onEvent: (evt) => {
+                    const level = evt.type === "error" || evt.type === "rejection" ? "error" : "warn";
+                    const text = evt.message ?? evt.args ?? evt.reason ?? evt.text ?? evt.error ?? "";
+                    if (level === "error") {
+                        console.log(`  \x1b[31m${sym.cross}\x1b[0m ${text.slice(0, 120)}`);
+                    }
+                },
+            });
+            info(`Browser capture server listening on ws://localhost:${capturePort}/__spdg/ws`);
+            // Start the loop watcher
+            const watcher = startLoopWatcher(cwd);
+            // Start live context writer (in case serve isn't running)
+            const liveWriter = startLiveContextWriter(cwd);
+            const cleanup = () => {
+                watcher.stop();
+                liveWriter.stop();
+                captureServer.stop();
+            };
+            process.on("SIGINT", cleanup);
+            process.on("SIGTERM", cleanup);
+            // Keep alive
+            setInterval(() => { }, 60_000);
+            break;
+        }
+        case "setup": {
+            banner();
+            const isAgentSetup = parsed.flags?.includes("--agent");
+            if (isAgentSetup) {
+                // Agent platform setup wizard
+                section("Closed Agent Setup");
+                info("Set up error monitoring for a closed AI agent platform.");
+                info("This lets you detect loops and recall fixes while using Lovable, Bolt, Replit, etc.\n");
+                const platforms = listPlatforms();
+                const platformOptions = platforms.map((p) => ({
+                    label: p.name,
+                    desc: p.description,
+                    detail: "",
+                }));
+                const platformIdx = await select("Which agent platform do you use?", platformOptions);
+                const platform = platforms[platformIdx].id;
+                const platformName = platforms[platformIdx].name;
+                console.log("");
+                section("Setup Steps");
+                // Generate the capture script
+                const script = generateCaptureScript(platform, { wsPort: 3100 });
+                info(`1. Open your project in ${c.bold}${platformName}${c.reset}`);
+                info(`2. Open browser DevTools: ${c.dim}Cmd+Option+J (Mac) or Ctrl+Shift+J (Windows)${c.reset}`);
+                info("3. Paste this script in the Console tab:\n");
+                // Write script to a file for easy access
+                const scriptPath = join(cwd, ".debug", `capture-${platform}.js`);
+                const scriptDir = join(cwd, ".debug");
+                if (!existsSync(scriptDir))
+                    mkdirSync(scriptDir, { recursive: true });
+                writeFileSync(scriptPath, script);
+                console.log(`${c.dim}${"─".repeat(60)}${c.reset}`);
+                // Show first 3 lines + hint
+                const scriptLines = script.split("\n").filter(Boolean);
+                console.log(`${c.green}${scriptLines.slice(0, 3).join("\n")}${c.reset}`);
+                if (scriptLines.length > 3) {
+                    console.log(`${c.dim}  ... ${scriptLines.length - 3} more lines${c.reset}`);
+                }
+                console.log(`${c.dim}${"─".repeat(60)}${c.reset}`);
+                console.log("");
+                info(`Full script saved to: ${c.bold}${scriptPath}${c.reset}`);
+                info(`Copy it with: ${c.bold}cat ${scriptPath} | pbcopy${c.reset}`);
+                console.log("");
+                info("4. After pasting, run this to start monitoring:\n");
+                console.log(`   ${c.bold}spdg watch${c.reset}\n`);
+                success("Setup complete. Paste the script, then run spdg watch.");
+            }
+            else {
+                // Regular init setup
+                info("Run 'spdg init' for project setup or 'spdg setup --agent' for closed agent setup.");
+            }
+            break;
+        }
+        case "fix": {
+            banner();
+            const subcommand = parsed.flags?.[0] ?? "help";
+            if (subcommand === "list") {
+                // Show issue inbox — bugs auto-filed from captures
+                section("Issue Inbox (auto-filed from captures)");
+                const issues = getOpenIssues(cwd);
+                if (issues.length === 0) {
+                    info("No issues yet. Run 'spdg watch' while using a closed agent — errors are filed automatically.");
+                }
+                else {
+                    for (const issue of issues) {
+                        console.log(`  ${c.red}${issue.id.slice(0, 16)}${c.reset} [${issue.platform}] x${issue.occurrenceCount}`);
+                        console.log(`    ${issue.errorType}: ${issue.errorMessage.slice(0, 100)}`);
+                        console.log(`    ${c.dim}${issue.sourceFile ?? "unknown file"} | ${issue.firstSeen.split("T")[0]}${c.reset}`);
+                        if (issue.failedApproaches.length > 0) {
+                            console.log(`    ${c.yellow}Failed: ${issue.failedApproaches[0].slice(0, 80)}${c.reset}`);
+                        }
+                        console.log("");
+                    }
+                    info(`${issues.length} open issue(s). Run ${c.bold}spdg fix show <id>${c.reset} to get the Claude prompt.`);
+                }
+                // Also show library
+                const entries = listFixPrompts(cwd);
+                if (entries.length > 0) {
+                    console.log("");
+                    section("Fix Library (solved)");
+                    for (const entry of entries) {
+                        const rate = entry.successCount + entry.failureCount > 0
+                            ? Math.round(entry.successCount / (entry.successCount + entry.failureCount) * 100) + "%"
+                            : "new";
+                        console.log(`  ${c.green}${entry.errorSignature.slice(0, 8)}${c.reset} [${entry.platform}] ${rate} success`);
+                        console.log(`    ${entry.errorExample.slice(0, 80)}`);
+                        console.log("");
+                    }
+                    info(`${entries.length} fix(es) in library.`);
+                }
+            }
+            else if (subcommand === "show") {
+                // Show a specific issue with its pre-built Claude prompt
+                const issueId = parsed.flags?.[1];
+                if (!issueId) {
+                    error("Usage: spdg fix show <issue-id>");
+                    info("Run 'spdg fix list' to see issue IDs.");
+                    break;
+                }
+                // Allow partial ID match
+                const issues = getOpenIssues(cwd);
+                const issue = issues.find((i) => i.id.startsWith(issueId)) ?? getIssue(cwd, issueId);
+                if (!issue) {
+                    error(`Issue not found: ${issueId}`);
+                    break;
+                }
+                section(`Issue: ${issue.errorType} (x${issue.occurrenceCount})`);
+                console.log(`${c.dim}ID: ${issue.id}${c.reset}`);
+                console.log(`Platform: ${issue.platform}`);
+                console.log(`Error: ${issue.errorMessage.slice(0, 200)}`);
+                if (issue.sourceFile)
+                    console.log(`File: ${issue.sourceFile}`);
+                if (issue.failedApproaches.length > 0) {
+                    console.log(`Failed approaches: ${issue.failedApproaches.join("; ")}`);
+                }
+                console.log("");
+                // Save the Claude prompt to a file and show copy command
+                const promptPath = join(cwd, ".debug", `prompt-${issue.id.slice(0, 16)}.md`);
+                writeFileSync(promptPath, issue.claudePrompt);
+                section("Claude Prompt (ready to copy)");
+                console.log(`${c.dim}${"─".repeat(60)}${c.reset}`);
+                const promptLines = issue.claudePrompt.split("\n");
+                // Show first 20 lines
+                for (const line of promptLines.slice(0, 20)) {
+                    console.log(`${c.cyan}${line}${c.reset}`);
+                }
+                if (promptLines.length > 20) {
+                    console.log(`${c.dim}  ... ${promptLines.length - 20} more lines${c.reset}`);
+                }
+                console.log(`${c.dim}${"─".repeat(60)}${c.reset}`);
+                console.log("");
+                info(`Full prompt saved to: ${c.bold}${promptPath}${c.reset}`);
+                console.log(`   Copy: ${c.bold}cat "${promptPath}" | pbcopy${c.reset}`);
+                console.log("");
+                info("After Claude gives you the fix prompt, run:");
+                console.log(`   ${c.bold}spdg fix solve ${issue.id.slice(0, 16)}${c.reset}`);
+            }
+            else if (subcommand === "solve") {
+                // Paste Claude's fix response back to close the issue
+                const issueId = parsed.flags?.[1];
+                if (!issueId) {
+                    error("Usage: spdg fix solve <issue-id>");
+                    break;
+                }
+                const issues = getOpenIssues(cwd);
+                const issue = issues.find((i) => i.id.startsWith(issueId)) ?? getIssue(cwd, issueId);
+                if (!issue) {
+                    error(`Issue not found: ${issueId}`);
+                    break;
+                }
+                const rl = createInterface({ input: process.stdin, output: process.stdout });
+                const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
+                info(`Solving: ${issue.errorType} — ${issue.errorMessage.slice(0, 80)}`);
+                console.log("");
+                info("Paste Claude's fix prompt (the text for the closed agent).");
+                info("Press Enter twice when done.\n");
+                const fixLines = [];
+                let emptyCount = 0;
+                const readFix = () => new Promise((resolve) => {
+                    const handler = (line) => {
+                        if (line === "") {
+                            emptyCount++;
+                            if (emptyCount >= 2) {
+                                rl.removeListener("line", handler);
+                                resolve(fixLines.join("\n").trim());
+                                return;
+                            }
+                            fixLines.push("");
+                        }
+                        else {
+                            emptyCount = 0;
+                            fixLines.push(line);
+                        }
+                    };
+                    rl.on("line", handler);
+                });
+                const fixPromptText = await readFix();
+                if (!fixPromptText) {
+                    error("Empty fix prompt. Aborting.");
+                    rl.close();
+                    break;
+                }
+                const explanation = await ask("\nOne-line explanation (why this works): ");
+                rl.close();
+                const entry = solveIssue(cwd, issue.id, fixPromptText, explanation);
+                console.log("");
+                success("Issue solved and fix added to library!");
+                info(`Fix ID: ${c.cyan}${entry.id}${c.reset}`);
+                info(`Signature: ${c.cyan}${entry.errorSignature}${c.reset}`);
+                info("This fix will be shown automatically to any user who hits this error.");
+            }
+            else {
+                section("Fix Commands — Issue Inbox + Library");
+                console.log(`
+  Issues are filed ${c.bold}automatically${c.reset} as users encounter errors with closed agents.
+  You curate the fixes by running each issue through Claude.
+
+  ${c.bold}spdg fix list${c.reset}           Show all open issues + solved fixes
+  ${c.bold}spdg fix show <id>${c.reset}      Show issue details + copy Claude prompt
+  ${c.bold}spdg fix solve <id>${c.reset}     Paste Claude's fix to close the issue
+
+  ${c.dim}Workflow:${c.reset}
+  1. Errors are captured automatically when 'spdg watch' is running
+  2. ${c.bold}spdg fix list${c.reset}  — see what needs fixing
+  3. ${c.bold}spdg fix show <id>${c.reset}  — copies the Claude prompt
+  4. Paste into Claude, get the fix prompt back
+  5. ${c.bold}spdg fix solve <id>${c.reset}  — paste Claude's response
+  6. Fix is now served to any user who hits this error
+        `);
+            }
             break;
         }
     }
