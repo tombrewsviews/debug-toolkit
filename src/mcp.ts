@@ -113,12 +113,55 @@ function text(data: unknown) {
  * Reads from .debug/live-context.json (written by serve process every 5s)
  * since MCP and serve run in separate processes with separate ring buffers.
  */
-function formatBrowserEvent(b: { timestamp: string; source: string; data: unknown }): string {
+const SEVERITY_ICON: Record<string, string> = { fatal: "🔴", error: "🟠", warning: "🟡" };
+
+/** Collapse React component tree dumps and stack traces to reduce noise */
+function collapseReactNoise(msg: string): string {
+  // Collapse "at ComponentName (file.tsx:line:col)" stack frames
+  const reactStackPattern = /(\n\s*at \w[\w.]*\s*\([\w/.:-]+\))+/g;
+  msg = msg.replace(reactStackPattern, (match) => {
+    const lines = match.trim().split("\n").map((l) => l.trim());
+    if (lines.length <= 2) return match;
+    return `\n    at ${lines[0].replace(/^at\s+/, "")}  (+ ${lines.length - 1} component stack frames)`;
+  });
+
+  // Collapse <ComponentName><ChildName>... JSX tree dumps
+  const jsxTreePattern = /(<\w+>(?:\s*<\w+>){3,}[\s\S]*?(?:<\/\w+>\s*){3,})/g;
+  msg = msg.replace(jsxTreePattern, (match) => {
+    const tags = match.match(/<\w+>/g) ?? [];
+    const first = tags[0] ?? "<Component>";
+    return `${first}...  (${tags.length} nested components collapsed)`;
+  });
+
+  // Truncate very long single-line messages (often stringified component trees)
+  if (msg.length > 500 && !msg.includes("\n")) {
+    return msg.slice(0, 400) + `…  (truncated, ${msg.length} chars total)`;
+  }
+
+  return msg;
+}
+
+function extractBrowserMessage(b: { timestamp: string; source: string; data: unknown }): string {
   const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
-  if (d?.args) return `[${d.level ?? b.source}] ${(d.args as string[]).join(" ")}`;
-  if (d?.url) return `[network] ${d.method ?? "GET"} ${d.url} → ${d.status ?? d.error}`;
-  if (d?.message) return `[${d.type ?? "error"}] ${d.message}`;
+  if (d?.args) return (d.args as string[]).join(" ");
+  if (d?.url) return `${d.method ?? "GET"} ${d.url} → ${d.status ?? d.error}`;
+  if (d?.message) return String(d.message);
   return JSON.stringify(d ?? b.data);
+}
+
+function formatBrowserEvent(b: { timestamp: string; source: string; data: unknown }, severity?: string): string {
+  const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
+  const icon = severity ? (SEVERITY_ICON[severity] ?? "") + " " : "";
+  if (d?.url) return `${icon}[network] ${d.method ?? "GET"} ${d.url} → ${d.status ?? d.error}`;
+  const level = d?.level ?? d?.type ?? b.source;
+  const msg = collapseReactNoise(extractBrowserMessage(b));
+  return `${icon}[${level}] ${msg}`;
+}
+
+/** Classify a browser event using the same engine as terminal errors */
+function classifyBrowserEvent(b: { timestamp: string; source: string; data: unknown }): import("./context.js").ErrorClassification {
+  const msg = extractBrowserMessage(b);
+  return classifyError(msg);
 }
 
 let tscCache: { result: string[]; timestamp: number } | null = null;
@@ -299,40 +342,44 @@ function buildLiveStatus(cwd: string, since?: { timestamp: string; terminalCount
       const hasMultipleSources = contexts.size > 1;
 
       if (errors.length > 0) {
-        if (hasMultipleSources) {
-          const webviewErrors = errors.filter((b) => (b.sourceContext ?? (b.lighthouseTriggered ? "lighthouse" : "webview")) === "webview");
-          const externalErrors = errors.filter((b) => b.sourceContext === "external");
-          const lighthouseErrors = errors.filter((b) => (b.sourceContext === "lighthouse") || (!b.sourceContext && b.lighthouseTriggered));
+        // Classify and sort browser errors by severity (fatal → error → warning)
+        const severityOrder: Record<string, number> = { fatal: 0, error: 1, warning: 2 };
+        const classifiedErrors = errors.map((b) => ({ event: b, classification: classifyBrowserEvent(b) }));
+        const sortBySeverity = <T extends { classification: { severity: string } }>(arr: T[]): T[] =>
+          [...arr].sort((a, b) => (severityOrder[a.classification.severity] ?? 3) - (severityOrder[b.classification.severity] ?? 3));
 
-          if (webviewErrors.length > 0) {
-            sections.push("## Browser Errors & Warnings (webview)\n");
-            sections.push("```");
-            for (const b of webviewErrors.slice(-30)) sections.push(formatBrowserEvent(b));
-            sections.push("```\n");
+        const renderBrowserErrors = (items: typeof classifiedErrors, label: string, note?: string) => {
+          if (items.length === 0) return;
+          const sorted = sortBySeverity(items);
+          sections.push(`## Browser Errors & Warnings${label}\n`);
+          if (note) sections.push(`*${note}*\n`);
+          sections.push("```");
+          for (const { event, classification } of sorted.slice(-30)) {
+            sections.push(formatBrowserEvent(event, classification.severity));
           }
-          if (externalErrors.length > 0) {
-            sections.push("## Browser Errors & Warnings (external Chrome)\n");
-            sections.push("*These errors came from an external Chrome instance, not the app's webview.*\n");
-            sections.push("```");
-            for (const b of externalErrors.slice(-30)) sections.push(formatBrowserEvent(b));
-            sections.push("```\n");
+          sections.push("```\n");
+          // Annotate with classification suggestions (deduplicated)
+          const seen = new Set<string>();
+          for (const { classification: c } of sorted.slice(0, 10)) {
+            if (c.category !== "runtime" && c.suggestion && !seen.has(c.category)) {
+              seen.add(c.category);
+              sections.push(`> **${c.category}**: ${c.suggestion}\n`);
+            }
           }
-          if (lighthouseErrors.length > 0) {
-            sections.push("## Browser Errors & Warnings (Lighthouse-triggered)\n");
-            sections.push("*These errors were triggered by Lighthouse loading the page in headless Chrome, not by normal app usage. They may still indicate real code issues.*\n");
-            sections.push("```");
-            for (const b of lighthouseErrors.slice(-30)) sections.push(formatBrowserEvent(b));
-            sections.push("```\n");
-          }
+        };
+
+        if (hasMultipleSources) {
+          const webviewErrors = classifiedErrors.filter((e) => (e.event.sourceContext ?? (e.event.lighthouseTriggered ? "lighthouse" : "webview")) === "webview");
+          const externalErrors = classifiedErrors.filter((e) => e.event.sourceContext === "external");
+          const lighthouseErrors = classifiedErrors.filter((e) => (e.event.sourceContext === "lighthouse") || (!e.event.sourceContext && e.event.lighthouseTriggered));
+
+          renderBrowserErrors(webviewErrors, " (webview)");
+          renderBrowserErrors(externalErrors, " (external Chrome)", "These errors came from an external Chrome instance, not the app's webview.");
+          renderBrowserErrors(lighthouseErrors, " (Lighthouse-triggered)", "These errors were triggered by Lighthouse loading the page in headless Chrome, not by normal app usage. They may still indicate real code issues.");
         } else {
           const label = contexts.has("lighthouse") ? " (Lighthouse-triggered)" : contexts.has("external") ? " (external Chrome)" : "";
-          sections.push(`## Browser Errors & Warnings${label}\n`);
-          if (contexts.has("lighthouse")) {
-            sections.push("*These errors were triggered by Lighthouse loading the page in headless Chrome, not by normal app usage. They may still indicate real code issues.*\n");
-          }
-          sections.push("```");
-          for (const b of errors.slice(-30)) sections.push(formatBrowserEvent(b));
-          sections.push("```\n");
+          const note = contexts.has("lighthouse") ? "These errors were triggered by Lighthouse loading the page in headless Chrome, not by normal app usage. They may still indicate real code issues." : undefined;
+          renderBrowserErrors(classifiedErrors, label, note);
         }
       }
 
@@ -413,13 +460,31 @@ function buildLiveStatus(cwd: string, since?: { timestamp: string; terminalCount
       sections.push("");
     }
 
-    // === SUMMARY (compact — counts already visible from sections above) ===
+    // === SEVERITY-RANKED SUMMARY ===
     const termErrors = live.terminal.filter((t) => /error|warn|panic|failed|crash|exception/i.test(t.text));
     const browserErrors = live.browser.filter((b) => {
       const d = typeof b.data === "object" && b.data !== null ? b.data as Record<string, unknown> : null;
       return d?.level === "error" || d?.level === "warn" || b.source === "browser-error" || b.source === "browser-network";
     });
-    const totalIssues = termErrors.length + live.buildErrors.length + browserErrors.length + tscErrors.length;
+
+    // Classify all issues by severity
+    const allClassified: Array<{ severity: string; category: string; source: string }> = [];
+    for (const t of termErrors) {
+      const c = classifyError(t.text);
+      allClassified.push({ severity: c.severity, category: c.category, source: "terminal" });
+    }
+    for (const b of browserErrors) {
+      const c = classifyBrowserEvent(b);
+      allClassified.push({ severity: c.severity, category: c.category, source: "browser" });
+    }
+    for (let i = 0; i < live.buildErrors.length; i++) {
+      allClassified.push({ severity: "error", category: "build", source: "build" });
+    }
+    for (let i = 0; i < tscErrors.length; i++) {
+      allClassified.push({ severity: "error", category: "typescript", source: "tsc" });
+    }
+
+    const totalIssues = allClassified.length;
 
     // Record health snapshot for trend tracking
     healthTrend.push({
@@ -431,7 +496,24 @@ function buildLiveStatus(cwd: string, since?: { timestamp: string; terminalCount
     if (healthTrend.length > MAX_HEALTH_SNAPSHOTS) healthTrend.shift();
 
     if (totalIssues > 0) {
-      sections.push(`**${totalIssues} issue(s) detected.** Call \`debug_investigate\` with the specific error for deep analysis.\n`);
+      // Group by severity, then by category with counts
+      const bySeverity: Record<string, Map<string, number>> = { fatal: new Map(), error: new Map(), warning: new Map() };
+      for (const item of allClassified) {
+        const sev = bySeverity[item.severity] ?? bySeverity.error;
+        sev.set(item.category, (sev.get(item.category) ?? 0) + 1);
+      }
+
+      sections.push("## Issues Summary\n");
+      const severityLabels: Array<[string, string, string]> = [["fatal", "🔴", "fatal"], ["error", "🟠", "error"], ["warning", "🟡", "warning"]];
+      for (const [key, icon, label] of severityLabels) {
+        const cats = bySeverity[key];
+        if (!cats || cats.size === 0) continue;
+        const total = Array.from(cats.values()).reduce((a, b) => a + b, 0);
+        const details = Array.from(cats.entries()).map(([cat, count]) => count > 1 ? `${cat} (×${count})` : cat).join(", ");
+        sections.push(`${icon} **${total} ${label}**: ${details}`);
+      }
+      sections.push("");
+      sections.push(`Call \`debug_investigate\` with the specific error for deep analysis.\n`);
     } else {
       sections.push("**No errors detected.** App running cleanly.\n");
     }
@@ -1298,6 +1380,79 @@ Supports JS/TS/Python/Go.`,
     });
   });
 
+  // ━━━ TOOL 2b: debug_hypothesis ━━━
+  server.registerTool("debug_hypothesis", {
+    title: "Log Hypothesis",
+    description: `Record a hypothesis before attempting a fix. Creates an auditable investigation trail.
+
+Use this BEFORE making code changes:
+- "I think X is the root cause because Y"
+- Update status to 'confirmed' or 'rejected' after testing
+
+Tracks your reasoning so you don't repeat failed approaches.`,
+    inputSchema: {
+      sessionId: z.string().describe("Active debug session ID"),
+      hypothesis: z.string().describe("What you think the root cause is and why (e.g., 'The null check in middleware is missing because req.user is undefined when auth skips')"),
+      status: z.enum(["testing", "confirmed", "rejected"]).optional().describe("Hypothesis status (default: testing). Use 'rejected' to mark a disproven theory."),
+      evidence: z.array(z.string()).optional().describe("Supporting observations (e.g., ['error only happens on POST', 'works when auth is disabled'])"),
+      hypothesisId: z.string().optional().describe("Update an existing hypothesis by ID instead of creating a new one"),
+    },
+  }, async ({ sessionId, hypothesis, status, evidence, hypothesisId }) => {
+    const session = loadSession(cwd, sessionId);
+
+    // Update existing hypothesis
+    if (hypothesisId) {
+      const existing = session.hypotheses.find((h) => h.id === hypothesisId);
+      if (!existing) {
+        return text({ error: `Hypothesis ${hypothesisId} not found in session ${sessionId}` });
+      }
+      if (status) existing.status = status;
+      if (evidence) existing.evidence.push(...evidence);
+      if (hypothesis && hypothesis !== existing.text) existing.text = hypothesis;
+      saveSession(cwd, session);
+
+      logActivity({ tool: "debug_hypothesis", ts: Date.now(), summary: `updated ${hypothesisId}: ${status ?? "evidence added"}` });
+      return text({
+        hypothesisId: existing.id,
+        text: existing.text,
+        status: existing.status,
+        evidence: existing.evidence,
+        allHypotheses: session.hypotheses.map((h) => ({ id: h.id, text: h.text, status: h.status })),
+        nextStep: existing.status === "rejected"
+          ? "Hypothesis rejected. Form a NEW hypothesis with a different theory — don't stack fixes on a disproven idea."
+          : existing.status === "confirmed"
+            ? "Hypothesis confirmed! Implement the fix, then use debug_verify to validate."
+            : "Continue testing. Use debug_instrument or debug_capture to gather more evidence.",
+      });
+    }
+
+    // Create new hypothesis
+    const hyp: Hypothesis = {
+      id: newHypothesisId(),
+      text: hypothesis,
+      status: (status ?? "testing") as "testing" | "confirmed" | "rejected",
+      evidence: evidence ?? [],
+    };
+    session.hypotheses.push(hyp);
+    saveSession(cwd, session);
+
+    const rejectedCount = session.hypotheses.filter((h) => h.status === "rejected").length;
+
+    logActivity({ tool: "debug_hypothesis", ts: Date.now(), summary: `new: ${hypothesis.slice(0, 60)}` });
+    return text({
+      hypothesisId: hyp.id,
+      text: hyp.text,
+      status: hyp.status,
+      evidence: hyp.evidence,
+      hypothesisNumber: session.hypotheses.length,
+      rejectedCount,
+      allHypotheses: session.hypotheses.map((h) => ({ id: h.id, text: h.text, status: h.status })),
+      nextStep: rejectedCount >= 2
+        ? `${rejectedCount} hypotheses already rejected. Consider: is the bug in a different layer entirely? Use debug_patterns to check for systemic issues.`
+        : "Test this hypothesis. Use debug_instrument to add logging, then debug_capture to observe.",
+    });
+  });
+
   // ━━━ TOOL 3: debug_capture ━━━
   server.registerTool("debug_capture", {
     title: "Capture Runtime Output",
@@ -1636,6 +1791,8 @@ Use this before cleanup to confirm the fix actually works.`,
       }
     }
 
+    const failedCount = session.failedApproaches?.length ?? 0;
+
     const verifyResponse: Record<string, unknown> = {
       passed,
       exitCode,
@@ -1647,8 +1804,28 @@ Use this before cleanup to confirm the fix actually works.`,
         : "Fix failed. Review the errors above and try a different approach.",
     };
 
-    // Loop detection on verify failure
-    if (!passed) {
+    // Escalation: 3+ failed fixes → question the architecture
+    if (!passed && failedCount >= 3) {
+      const rejectedHypotheses = session.hypotheses.filter((h) => h.status === "rejected");
+      verifyResponse.escalation = {
+        triggered: true,
+        failedCount,
+        failedApproaches: session.failedApproaches!.slice(-3),
+        rejectedHypotheses: rejectedHypotheses.map((h) => h.text),
+        recommendations: [
+          "STOP fixing symptoms. 3+ failed attempts means your mental model of the bug is wrong.",
+          "Re-read the ORIGINAL error from scratch — ignore everything you've assumed so far.",
+          "Run debug_recall with the original error to check if this was solved before.",
+          "Run debug_patterns to detect systemic issues you may be missing.",
+          "Consider: is the bug in a completely different file/layer than where you've been looking?",
+          "If all else fails, use debug_cleanup to close this session and start fresh with debug_investigate.",
+        ],
+      };
+      verifyResponse.nextStep = `🚨 ESCALATION: ${failedCount} fix attempts failed. Your understanding of the root cause is likely wrong. Stop and re-investigate before trying another fix.`;
+    }
+
+    // Loop detection on verify failure (only if escalation not already triggered)
+    if (!passed && failedCount < 3) {
       const loopAnalysis = analyzeLoop(session, cwd);
       if (loopAnalysis.looping) {
         verifyResponse.loopDetection = {

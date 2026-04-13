@@ -222,11 +222,12 @@ spdg   # setup only, agent calls tools manually
 ```
 1. Read debug://status  → see live terminal/browser/build errors instantly
 2. debug_investigate    → deep analysis + source code + git + past solutions
-3. debug_instrument     → add logging if more info needed
-4. debug_capture        → collect runtime output (or wait for it with wait=true)
-5. (apply fix)
-6. debug_verify         → confirm fix, auto-save to memory
-7. debug_cleanup        → save diagnosis for future sessions
+3. debug_hypothesis     → log what you think the root cause is and why
+4. debug_instrument     → add logging if more info needed
+5. debug_capture        → collect runtime output (or wait for it with wait=true)
+6. (apply fix)
+7. debug_verify         → confirm fix, auto-save to memory (3+ failures → escalation)
+8. debug_cleanup        → save diagnosis for future sessions
 ```
 
 **Tool decision tree** — the activation rules teach the agent which tools to reach for:
@@ -377,6 +378,20 @@ Detect systemic issues across all past sessions + debug telemetry:
 
 Also returns: `suggestions` (preventive actions), `telemetry` (fix rate, memory effectiveness, top errors).
 
+### debug_hypothesis
+
+Record a hypothesis before attempting a fix. Creates an auditable investigation trail so you don't repeat failed approaches. Update status to `confirmed` or `rejected` after testing.
+
+```
+Input:  { sessionId, hypothesis: "The null check in middleware is missing because req.user is undefined when auth skips" }
+Output: { hypothesisId: "hyp_abc", text: "...", status: "testing", allHypotheses: [...] }
+
+Input:  { sessionId, hypothesisId: "hyp_abc", status: "rejected", evidence: ["error persists after adding null check"] }
+Output: { hypothesisId: "hyp_abc", status: "rejected", nextStep: "Form a NEW hypothesis..." }
+```
+
+After 2+ rejected hypotheses, suggests running `debug_patterns` to detect systemic issues you may be missing.
+
 ### debug_instrument
 
 Add tagged logging to source files. Supports JS/TS, Python, Go, and Rust. Supports conditional instrumentation:
@@ -404,6 +419,8 @@ Wait mode is designed for long-running processes (image generation, builds, asyn
 ### debug_verify
 
 After applying a fix, run the test command and get a clear pass/fail with exit code and error output. Auto-saves the diagnosis to memory on pass. Tracks outcome in telemetry.
+
+**Escalation rule:** After 3+ failed fix attempts, triggers an escalation that forces re-investigation. The response includes all failed approaches, rejected hypotheses, and specific recommendations — your mental model of the bug is likely wrong and you should stop fixing symptoms.
 
 ### debug_cleanup
 
@@ -570,7 +587,7 @@ Run `spdg doctor` to verify all prerequisites at once. It groups checks into:
 ```
 src/
   index.ts         — CLI entry (guided setup, init, doctor, serve, export, import)
-  mcp.ts           — 13 tools + 1 resource + MCP server + Ghost OS bridge
+  mcp.ts           — 14 tools + 1 resource + MCP server + Ghost OS bridge
   activity.ts      — Live activity feed (file-based IPC between MCP and serve terminal)
   ghost-bridge.ts  — MCP client for Ghost OS (screenshots, DOM, inspect)
   context.ts       — Investigation engine (stack parsing, source, git, env)
@@ -599,6 +616,11 @@ src/
 ```
 
 ## Changelog
+
+### v0.20.0 — Systematic Debugging Discipline
+
+- **`debug_hypothesis` tool** — Record hypotheses before attempting fixes, creating an auditable investigation trail. Create, update, confirm, or reject hypotheses with supporting evidence. After 2+ rejected hypotheses, suggests checking `debug_patterns` for systemic issues.
+- **Escalation rule in `debug_verify`** — After 3+ failed fix attempts, triggers an escalation that forces re-investigation instead of more guessing. Returns failed approaches, rejected hypotheses, and 6 specific recommendations. Takes priority over loop detection warnings.
 
 ### v0.19.0 — Diagnostic Reliability + Configuration Awareness
 

@@ -1,7 +1,7 @@
 ---
 name: stackpack-debug
 description: "Runtime DevTools for AI agents. Captures terminal output, browser console, build errors, TypeScript errors, git diffs, and screenshots from the running app. MANDATORY for: any bug, error, issue, warning, crash, panic, layout problem, visual glitch, wrong behavior, performance issue, test failure, reviewing the running app, checking app health. Read debug://status FIRST — it's a live situation report. Read debug://errors for errors only. Call debug_investigate for deep analysis."
-tools: ["debug_investigate", "debug_recall", "debug_patterns", "debug_instrument", "debug_capture", "debug_verify", "debug_cleanup", "debug_session", "debug_perf", "debug_visual", "debug_setup"]
+tools: ["debug_investigate", "debug_hypothesis", "debug_recall", "debug_patterns", "debug_instrument", "debug_capture", "debug_verify", "debug_cleanup", "debug_session", "debug_perf", "debug_visual", "debug_setup"]
 ---
 
 # stackpack-debug — Runtime DevTools for AI Agents
@@ -70,10 +70,12 @@ This is updated every 5 seconds. It tells you what's happening RIGHT NOW without
 ```
 1. Read debug://status         → see what's happening right now
 2. debug_investigate            → deep analysis with runtime context + memory
-3. debug_visual                 → screenshot/DOM if visual bug
-4. debug_perf                   → profile if performance issue
-5. (apply fix)
-6. debug_verify                 → confirm fix works (auto-saves to memory)
+3. debug_hypothesis             → log what you think the root cause is and why
+4. debug_visual                 → screenshot/DOM if visual bug
+5. debug_perf                   → profile if performance issue
+6. (apply fix)
+7. debug_verify                 → confirm fix works (auto-saves to memory)
+                                  3+ failures → escalation triggers re-investigation
 ```
 
 **Shortcuts:**
@@ -109,6 +111,18 @@ Lighthouse performance profiling with before/after comparison.
 { sessionId, url: "http://localhost:1420", phase: "before" | "after" }
 ```
 
+### debug_hypothesis
+Log a hypothesis before attempting a fix. Creates an auditable investigation trail. Update status to `confirmed` or `rejected` after testing.
+```
+# Create new hypothesis
+{ sessionId, hypothesis: "The null check is missing because req.user is undefined when auth skips" }
+
+# Update existing hypothesis
+{ sessionId, hypothesisId: "hyp_abc", status: "rejected", evidence: ["error persists after adding null check"] }
+```
+
+After 2+ rejected hypotheses, the tool suggests checking `debug_patterns` for systemic issues.
+
 ### debug_recall
 Search past debug sessions for similar bugs.
 ```
@@ -131,7 +145,7 @@ Run a command and capture output, or drain buffered events. SessionId is optiona
 ```
 
 ### debug_verify
-Confirm a fix works. **Auto-saves to memory on pass.**
+Confirm a fix works. **Auto-saves to memory on pass.** After 3+ failed fix attempts, triggers an escalation that forces re-investigation — your mental model of the bug is likely wrong.
 ```
 { sessionId, command: "npm test", expectNoErrors?: true }
 ```
