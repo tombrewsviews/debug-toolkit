@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { redactSensitiveData } from "./security.js";
+import { getCachedTopology } from "./network.js";
 import {
   type Capture,
   type DebugSession,
@@ -838,12 +839,19 @@ export function extractFilePathsFromError(data: unknown): Array<{ original: stri
 
 export interface LiveContext {
   updatedAt: string;
+  captureMode: "full" | "active-collection" | "static";
   terminal: Array<{ timestamp: string; text: string; stream: string }>;
   browser: Array<{ timestamp: string; source: string; data: unknown; lighthouseTriggered?: boolean; sourceContext?: "webview" | "external" | "lighthouse" }>;
   buildErrors: Array<{ tool: string; file: string | null; line: number | null; code: string | null; message: string }>;
   runtimeErrors: Array<{ type: string; message: string; file: string | null; line: number | null; stack: string | null }>;
   configState: Array<{ source: string; key: string; value: string; persistence: "env-file" | "env-var" }>;
   counts: { terminal: number; browser: number; buildErrors: number; runtimeErrors: number };
+  network: {
+    devServer: { port: number; pid: number; process: string } | null;
+    inbound: Array<{ remoteAddr: string; remotePort: number; state: string; service?: string }>;
+    outbound: Array<{ remoteAddr: string; remotePort: number; state: string; service?: string }>;
+    missing?: string[];
+  } | null;
 }
 
 // --- Config state reading (env files + process env) ---
@@ -937,8 +945,13 @@ function redactConfigValue(key: string, value: string): string {
 export function writeLiveContext(cwd: string): void {
   // Status shows max ~110 lines — no need to peek more than that
   const recent = peekRecentOutput({ terminalLines: 100, browserLines: 50, buildErrors: 30, runtimeErrors: 20 });
+  const hasTerminal = recent.counts.terminal > 0;
+  const hasBrowser = recent.counts.browser > 0;
+  const captureMode: LiveContext["captureMode"] = (hasTerminal || hasBrowser) ? "full" : "active-collection";
+  const topology = getCachedTopology(cwd);
   const context: LiveContext = {
     updatedAt: new Date().toISOString(),
+    captureMode,
     terminal: recent.terminal.map((c) => {
       const d = typeof c.data === "object" && c.data !== null ? c.data as Record<string, unknown> : null;
       return { timestamp: c.timestamp, text: String(d?.text ?? d?.data ?? c.data), stream: String(d?.stream ?? "stdout") };
@@ -956,6 +969,7 @@ export function writeLiveContext(cwd: string): void {
     })),
     configState: readConfigState(cwd),
     counts: recent.counts,
+    network: topology,
   };
   const dir = join(cwd, ".debug");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
