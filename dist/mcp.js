@@ -21,6 +21,7 @@ import { drainCaptures, runAndCapture, getRecentCaptures, readTauriLogs, drainBu
 import { investigate, isVisualError, unwrapErrorChain, classifyError, detectProviderMismatch } from "./context.js";
 import { validateCommand } from "./security.js";
 import { remember, recall, markUsed, memoryStats, maybeArchive } from "./memory.js";
+import { getCachedTopology } from "./network.js";
 import { triageError } from "./triage.js";
 import { generateSuggestions } from "./suggestions.js";
 import { METHODOLOGY } from "./methodology.js";
@@ -201,6 +202,62 @@ function collapseRepeats(lines) {
     result.push(count > 1 ? `${prev}  (×${count})` : prev);
     return result;
 }
+function buildCaptureStatus(live, topology) {
+    const lines = [];
+    if (live && live.captureMode === "full") {
+        lines.push("## Capture Mode: FULL\n");
+    }
+    else if (live && live.captureMode === "active-collection") {
+        lines.push("## Capture Mode: ACTIVE COLLECTION\n");
+    }
+    else if (topology?.devServer) {
+        lines.push("## Capture Mode: PARTIAL\n");
+    }
+    else {
+        lines.push("## Capture Mode: STATIC\n");
+    }
+    if (live?.terminal && live.terminal.length > 0) {
+        const errors = live.terminal.filter((t) => /error|warn|panic|failed|crash|exception/i.test(t.text));
+        lines.push(`- ✓ Terminal output (${live.terminal.length} lines, ${errors.length} errors)`);
+    }
+    else {
+        lines.push("- ✗ Terminal output — run `spdg` → \"Start dev server\" or \"Monitor running app\"");
+    }
+    if (live?.browser && live.browser.length > 0) {
+        lines.push(`- ✓ Browser console (${live.browser.length} events)`);
+    }
+    else {
+        lines.push("- ✗ Browser console — run `spdg` → \"Start dev server\" for auto-capture");
+    }
+    if (live?.buildErrors && live.buildErrors.length > 0) {
+        lines.push(`- ✓ Build errors: ${live.buildErrors.length}`);
+    }
+    else {
+        lines.push("- ✓ Build errors: 0");
+    }
+    const net = live?.network ?? topology;
+    if (net?.devServer) {
+        lines.push(`- ✓ Dev server detected on :${net.devServer.port} (PID ${net.devServer.pid}, ${net.devServer.process})`);
+        const inCount = net.inbound?.length ?? 0;
+        const outParts = (net.outbound ?? []).map((c) => `${c.service ?? "unknown"}:${c.remotePort}`);
+        if (outParts.length > 0) {
+            lines.push(`- ✓ Network: ${inCount} inbound, ${net.outbound.length} outbound (${outParts.join(", ")})`);
+        }
+        else {
+            lines.push(`- ✓ Network: ${inCount} inbound, 0 outbound`);
+        }
+        if (net.missing && net.missing.length > 0) {
+            for (const m of net.missing) {
+                lines.push(`  - ⚠ No connection to ${m} — server may be stuck or service not running`);
+            }
+        }
+    }
+    else {
+        lines.push("- ✗ No dev server detected on common ports");
+    }
+    lines.push("");
+    return lines.join("\n");
+}
 function buildLiveStatus(cwd, since) {
     const sections = [];
     sections.push("# stackpack-debug — Live Situation Report\n");
@@ -244,10 +301,36 @@ function buildLiveStatus(cwd, since) {
             return sections.join("\n");
         }
     }
+    const topology = getCachedTopology(cwd);
     if (!hasLive && !hasLocal) {
-        sections.push("**Dev server not running or not capturing.**\n");
-        sections.push("Start with: `npx stackpack-debug serve -- <your dev command>`\n");
-        // Still provide what we can — static analysis and git
+        // No live context — do inline collection with capture status
+        sections.push(buildCaptureStatus(null, topology));
+        // Network topology section (key value-add for MCP-only mode)
+        if (topology?.devServer) {
+            sections.push("## Network Topology\n");
+            sections.push(`Dev server: **${topology.devServer.process}** on port ${topology.devServer.port} (PID ${topology.devServer.pid})\n`);
+            if (topology.inbound.length > 0) {
+                sections.push(`Inbound connections: ${topology.inbound.length}`);
+            }
+            if (topology.outbound.length > 0) {
+                sections.push("Outbound connections:");
+                for (const c of topology.outbound) {
+                    sections.push(`- ${c.service ?? c.remoteAddr}:${c.remotePort} (${c.state})`);
+                }
+            }
+            else {
+                sections.push("Outbound connections: **none** — server is not connecting to any backends");
+            }
+            if (topology.missing && topology.missing.length > 0) {
+                sections.push("");
+                sections.push("**Missing expected connections:**");
+                for (const m of topology.missing) {
+                    sections.push(`- ⚠ ${m}`);
+                }
+            }
+            sections.push("");
+        }
+        // Static analysis fallback (existing behavior, keep as-is)
         const tscErrors = runQuickTsc(cwd);
         if (tscErrors.length > 0) {
             sections.push("## TypeScript Errors\n");
@@ -270,6 +353,7 @@ function buildLiveStatus(cwd, since) {
     }
     if (hasLive && live) {
         sections.push(`*Updated: ${live.updatedAt}*\n`);
+        sections.push(buildCaptureStatus(live, topology));
         // === FULL TERMINAL OUTPUT (unfiltered — agent needs to see app state) ===
         if (live.terminal.length > 0) {
             // Split into errors and application output
@@ -340,6 +424,19 @@ function buildLiveStatus(cwd, since) {
                 const envVarCount = providerKeys.filter(c => c.persistence === "env-var").length;
                 if (envVarCount > 0 && envFileCount === 0) {
                     sections.push("\n> **Warning**: All provider settings are from `process.env` only (no .env file). These will reset on server restart.");
+                }
+                sections.push("");
+            }
+        }
+        // === NETWORK TOPOLOGY ===
+        const net = live.network ?? topology;
+        if (net?.devServer) {
+            sections.push("## Network Topology\n");
+            const outParts = (net.outbound ?? []).map((c) => `${c.service ?? c.remoteAddr}:${c.remotePort}`);
+            sections.push(`Dev server: **${net.devServer.process}** :${net.devServer.port} → ${outParts.length > 0 ? outParts.join(", ") : "no outbound connections"}\n`);
+            if (net.missing && net.missing.length > 0) {
+                for (const m of net.missing) {
+                    sections.push(`> ⚠ **Missing connection**: ${m} — check if service is running or if middleware is blocking`);
                 }
                 sections.push("");
             }
@@ -951,6 +1048,24 @@ Start every debugging session with this tool.`,
                 const config = readConfigState(cwd);
                 const providerConfig = config.filter(c => /PROVIDER|MODEL|OLLAMA|OPENAI|ANTHROPIC|GOOGLE|GROQ|TOGETHER|BASE_URL/i.test(c.key));
                 return providerConfig.length > 0 ? providerConfig : undefined;
+            })(),
+            networkTopology: (() => {
+                const topo = getCachedTopology(cwd);
+                if (!topo?.devServer)
+                    return undefined;
+                const topoResult = {
+                    devServer: `${topo.devServer.process} on :${topo.devServer.port}`,
+                    inbound: topo.inbound.length,
+                    outbound: topo.outbound.map((c) => `${c.service ?? "unknown"}:${c.remotePort}`),
+                };
+                if (topo.missing && topo.missing.length > 0) {
+                    topoResult.missingConnections = topo.missing;
+                    topoResult.hint = "Expected backend connections not found — check middleware/auth layer or verify service is running.";
+                }
+                if (topo.outbound.length === 0 && topo.inbound.length > 0) {
+                    topoResult.hint = "Server has inbound connections but no outbound — request may be stuck in middleware before reaching backend.";
+                }
+                return topoResult;
             })(),
             visualError,
             userFrames: result.frames.filter((f) => f.isUserCode).map((f) => ({

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { redactSensitiveData } from "./security.js";
+import { getCachedTopology } from "./network.js";
 import { newCaptureId, lookupHypothesis, saveSession, } from "./session.js";
 // --- Marker tag extraction ---
 const MARKER_RE = /\[DBG_(\d{3})\]/;
@@ -820,8 +821,13 @@ function redactConfigValue(key, value) {
 export function writeLiveContext(cwd) {
     // Status shows max ~110 lines — no need to peek more than that
     const recent = peekRecentOutput({ terminalLines: 100, browserLines: 50, buildErrors: 30, runtimeErrors: 20 });
+    const hasTerminal = recent.counts.terminal > 0;
+    const hasBrowser = recent.counts.browser > 0;
+    const captureMode = (hasTerminal || hasBrowser) ? "full" : "active-collection";
+    const topology = getCachedTopology(cwd);
     const context = {
         updatedAt: new Date().toISOString(),
+        captureMode,
         terminal: recent.terminal.map((c) => {
             const d = typeof c.data === "object" && c.data !== null ? c.data : null;
             return { timestamp: c.timestamp, text: String(d?.text ?? d?.data ?? c.data), stream: String(d?.stream ?? "stdout") };
@@ -839,6 +845,7 @@ export function writeLiveContext(cwd) {
         })),
         configState: readConfigState(cwd),
         counts: recent.counts,
+        network: topology,
     };
     const dir = join(cwd, ".debug");
     if (!existsSync(dir))

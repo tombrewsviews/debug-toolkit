@@ -20,6 +20,7 @@ import { getOpenIssues, getIssue, solveIssue, listFixPrompts } from "./fix-libra
 import { banner, info, success, warn, error, dim, section, kv, printHelp, sym, c, select, spinner } from "./cli.js";
 import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration } from "./adapters.js";
 import { checkForUpdate, backgroundSelfUpgrade } from "./utils.js";
+import { detectDevServers, getNetworkTopology, clearTopologyCache } from "./network.js";
 // --- Parse ---
 function parseArgs(argv) {
     const args = argv.slice(2);
@@ -548,9 +549,14 @@ function buildMenuOptions(cwd) {
     const { cmd: devCmd } = detectDevCommand(cwd);
     return [
         {
-            label: "Start dev server with capture",
-            desc: `Runs ${devCmd} with browser console, network, and build error capture.`,
+            label: "Start dev server with full capture",
+            desc: `Wraps ${devCmd} with terminal, browser, and network monitoring.`,
             detail: "Launches behind an HTTP proxy with auto-capture. Stop anytime with Ctrl+C.",
+        },
+        {
+            label: "Monitor running app (no restart)",
+            desc: "Attaches to your already-running dev server. Network, config, and build watching.",
+            detail: "Detects dev server port via lsof. No terminal/browser capture without proxy.",
         },
         {
             label: "Check setup health",
@@ -712,6 +718,72 @@ async function guidedSetup(cwd) {
     success(`Setup complete! Choose what to do next, or press ${c.dim}Esc${c.reset} to exit.\n`);
     await mainMenu(cwd);
 }
+async function monitorRunningApp(cwd) {
+    section("Monitor Mode");
+    info("Scanning for running dev server...\n");
+    let servers = detectDevServers();
+    if (servers.length === 0) {
+        info("Waiting for dev server... Start one in another terminal.\n");
+        dim("  Scanning ports: 3000, 3001, 4000, 5173, 5174, 8080, 8081, 1420");
+        info("");
+        // Poll every 5s until a dev server appears or user cancels
+        servers = await new Promise((resolve) => {
+            const interval = setInterval(() => {
+                const found = detectDevServers();
+                if (found.length > 0) {
+                    clearInterval(interval);
+                    resolve(found);
+                }
+            }, 5_000);
+            const onExit = () => { clearInterval(interval); resolve([]); };
+            process.once("SIGINT", onExit);
+        });
+        if (servers.length === 0) {
+            info("Cancelled.");
+            return;
+        }
+    }
+    const server = servers[0];
+    success(`Found dev server: ${c.bold}${server.process}${c.reset} on port ${c.cyan}${server.port}${c.reset} (PID ${server.pid})\n`);
+    const topology = getNetworkTopology(server, cwd);
+    if (topology.outbound.length > 0) {
+        kv("backends", topology.outbound.map((conn) => `${conn.service ?? "unknown"}:${conn.remotePort}`).join(", "));
+    }
+    if (topology.missing && topology.missing.length > 0) {
+        for (const m of topology.missing) {
+            warn(`Missing expected connection: ${m}`);
+        }
+    }
+    info("");
+    info("Monitoring network, config, and build state. Press Ctrl+C to stop.\n");
+    // Start capture server for browser events
+    const capturePort = 3100;
+    const captureServer = startCaptureServer({
+        port: capturePort,
+        cwd,
+        onEvent: (evt) => {
+            const text = evt.message ?? evt.args ?? evt.reason ?? evt.text ?? evt.error ?? "";
+            if (evt.type === "error" || evt.type === "rejection") {
+                console.log(`  \x1b[31m${sym.cross}\x1b[0m ${String(text).slice(0, 120)}`);
+            }
+        },
+    });
+    dim(`  Browser capture server: ws://localhost:${capturePort}/__spdg/ws`);
+    const liveWriter = startLiveContextWriter(cwd);
+    const loopWatcher = startLoopWatcher(cwd);
+    const activityFeed = startActivityFeed(cwd);
+    const cleanup = () => {
+        activityFeed.stop();
+        liveWriter.stop();
+        loopWatcher.stop();
+        captureServer.stop();
+        clearTopologyCache();
+    };
+    process.on("SIGINT", cleanup);
+    process.on("SIGTERM", cleanup);
+    // Keep alive
+    setInterval(() => { }, 60_000);
+}
 async function mainMenu(cwd) {
     // Menu loop — keeps returning to menu after each action
     while (true) {
@@ -726,9 +798,12 @@ async function mainMenu(cwd) {
                 await guidedServe(cwd);
                 return; // serve takes over, don't loop
             case 1:
+                await monitorRunningApp(cwd);
+                return;
+            case 2:
                 doctorCommand(cwd);
                 break;
-            case 2:
+            case 3:
                 initCommand(cwd);
                 break;
         }
@@ -1004,6 +1079,20 @@ async function main() {
             }
             // MCP server runs in a separate process (via .mcp.json config).
             // Don't start it here — stdio is shared with the child dev server.
+            // Show network topology after proxy is set up
+            setTimeout(() => {
+                const servers = detectDevServers();
+                if (servers.length > 0) {
+                    const topology = getNetworkTopology(servers[0], cwd);
+                    if (topology.outbound.length > 0) {
+                        kv("backends", topology.outbound.map((conn) => `${conn.service ?? "unknown"}:${conn.remotePort}`).join(", "));
+                    }
+                    if (topology.missing && topology.missing.length > 0) {
+                        for (const m of topology.missing)
+                            warn(`Missing: ${m}`);
+                    }
+                }
+            }, 3_000); // Delay to let the dev server start up and establish connections
             // Live activity feed — shows MCP tool calls in this terminal
             const activityFeed = startActivityFeed(cwd);
             // Live context writer — writes .debug/live-context.json every 5s for MCP to read

@@ -1,6 +1,6 @@
 {
   "name": "stackpack-debug",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Closed-loop debugging toolkit for AI coding agents",
   "type": "module",
   "bin": {

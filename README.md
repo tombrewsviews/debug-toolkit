@@ -569,6 +569,15 @@ src/
 
 ## Changelog
 
+### v0.23.0 — Transparent Capture
+
+- **Network topology engine** — detects running dev servers via `lsof`, maps inbound connections (browsers) and outbound connections (backends like Ollama, Postgres, Redis), and cross-references with config state to flag missing expected connections.
+- **Three capture tiers** — every `debug://status` response now shows a capture mode indicator (FULL / ACTIVE COLLECTION / PARTIAL / STATIC) with exactly what data sources are available and what's missing.
+- **"Monitor running app" CLI mode** — new menu option in `spdg` that attaches to an already-running dev server without restarting it. Provides network topology, config state, tsc polling, browser capture server, and loop detection.
+- **MCP inline collection** — when no `spdg serve` or monitor is running, the MCP server actively scans for dev server ports and includes network topology in `debug://status`. No more "Dev server not running" dead ends.
+- **Missing connection alerts** — when config says `OLLAMA_BASE_URL=localhost:11434` but the server has no outbound connection to port 11434, the status report flags it with an actionable warning.
+- **Network correlation in debug_investigate** — investigation responses include network topology with hints like "Server has inbound connections but no outbound — request may be stuck in middleware."
+
 ### v0.22.0 — Auto-Upgrade on Startup
 
 - **Background self-upgrade** — every time you run `spdg` (or any CLI command), the toolkit checks npm for a newer version and upgrades in the background. No manual `spdg update` needed — you're always on the latest version by the next restart.

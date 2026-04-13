@@ -130,6 +130,7 @@ export declare function extractFilePathsFromError(data: unknown): Array<{
 }>;
 export interface LiveContext {
     updatedAt: string;
+    captureMode: "full" | "active-collection" | "static";
     terminal: Array<{
         timestamp: string;
         text: string;
@@ -168,6 +169,26 @@ export interface LiveContext {
         buildErrors: number;
         runtimeErrors: number;
     };
+    network: {
+        devServer: {
+            port: number;
+            pid: number;
+            process: string;
+        } | null;
+        inbound: Array<{
+            remoteAddr: string;
+            remotePort: number;
+            state: string;
+            service?: string;
+        }>;
+        outbound: Array<{
+            remoteAddr: string;
+            remotePort: number;
+            state: string;
+            service?: string;
+        }>;
+        missing?: string[];
+    } | null;
 }
 /** Read config state from .env files and process env. Returns redacted key-value pairs. */
 export declare function readConfigState(cwd: string): Array<{

@@ -174,6 +174,21 @@ Check/install integrations, check for updates, or update stackpack-debug.
 
 **Note:** stackpack-debug auto-upgrades in the background on every startup. Manual updates are rarely needed.
 
+## Network Awareness
+
+The toolkit detects running dev servers and maps their network connections automatically. This works in ALL modes — even without `spdg serve`.
+
+**What it shows:**
+- Dev server port, PID, and process name
+- Inbound connections (browsers connecting to the server)
+- Outbound connections (server connecting to Ollama, Postgres, Redis, etc.)
+- Missing connections (config expects a service but no connection exists)
+
+**When to look at it:**
+- Timeout errors → check if the server has outbound connections
+- "No response" → check if requests reach the server (inbound) and leave it (outbound)
+- Wrong provider → check which service the server is actually connecting to
+
 ## Rules
 
 1. **Read `debug://status` BEFORE investigating.** It's free context.
