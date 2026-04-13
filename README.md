@@ -154,23 +154,22 @@ stackpack-debug eliminates that loop. It captures terminal output, browser conso
 
 ## How It Works
 
-stackpack-debug runs as an MCP server. Setup (`spdg`) registers it in `.mcp.json` so Claude Code loads it automatically. For deeper signal capture, wrap your dev server with `spdg serve`.
+The MCP server starts automatically when Claude Code opens your project (via `.mcp.json`). The tools are always available — no extra steps needed.
 
-### Why serve mode?
+### Start your dev server through `spdg`
 
-Claude Code can already read terminal output. But it **cannot** access:
-- Browser console (`console.log`, `console.error`, unhandled rejections)
-- Network requests (failed API calls, CORS errors, wrong provider endpoints)
-- Real-time loop detection (agent spinning on the same error)
-
-`spdg serve` captures all of this by injecting a lightweight script into your app's HTML via an HTTP proxy. The MCP server reads the captured data and serves it through `debug://status`.
+Always start your dev server through stackpack-debug. Run `spdg` and pick "Start dev server with capture", or use the command directly:
 
 ```bash
 spdg serve -- npm run dev           # web project
 spdg serve -- npm run tauri -- dev  # Tauri project
 ```
 
-Without serve mode, the MCP tools still work — they just rely on static analysis (TypeScript errors, git diffs, file reading) instead of live runtime data.
+**When you start your dev server through `spdg`:** the toolkit captures browser console, network requests, and build errors in real time. `debug://status` shows live runtime data.
+
+**When you start your dev server normally** (`npm run dev`): the MCP tools still work, but they only have terminal output, TypeScript errors, git diffs, and file analysis. No browser console, no network capture.
+
+The capture works by running your dev server behind a lightweight HTTP proxy that injects a script into your app's HTML. The script forwards `console.log/error`, unhandled exceptions, and failed network requests back to the toolkit via WebSocket.
 
 ### Architecture
 
