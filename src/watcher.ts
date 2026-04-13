@@ -102,11 +102,18 @@ function analyze(cwd: string): WatcherAlert[] {
   const alerts: WatcherAlert[] = [];
 
   // --- Detection 1: Error count rising (degrading health) ---
+  // Only alert when the error count is ACTIVELY increasing, not when it appeared
+  // once and stabilized. "0 → 1 → 1 → 1" is NOT rising — "0 → 1 → 2 → 3" IS.
   const recent5 = history.slice(-5);
   if (recent5.length >= 3) {
     const counts = recent5.map((s) => s.totalCount);
-    const rising = counts.every((c, i) => i === 0 || c >= counts[i - 1]) && counts[counts.length - 1] > counts[0];
-    if (rising && counts[counts.length - 1] > 0) {
+    // Require at least 2 distinct increases (not just one jump from 0)
+    let increases = 0;
+    for (let i = 1; i < counts.length; i++) {
+      if (counts[i] > counts[i - 1]) increases++;
+    }
+    const rising = increases >= 2 && counts[counts.length - 1] > counts[0];
+    if (rising) {
       alerts.push({
         type: "degrading",
         severity: counts[counts.length - 1] >= counts[0] + 3 ? "critical" : "warning",
@@ -117,28 +124,51 @@ function analyze(cwd: string): WatcherAlert[] {
   }
 
   // --- Detection 2: Same error signature repeating (loop) ---
+  // Only alert if the error persisted across a fix attempt (count disappeared then reappeared).
+  // A steady persistent error is NOT a loop — it's a pre-existing issue.
   if (history.length >= 4) {
-    const recent = history.slice(-6);
+    const recent = history.slice(-8);
     const sigCounts = new Map<string, number>();
+    const sigEverAbsent = new Map<string, boolean>();
     for (const snap of recent) {
       for (const sig of snap.errorSignatures) {
         sigCounts.set(sig, (sigCounts.get(sig) ?? 0) + 1);
       }
+      // Track if any signature was ever absent (gap = fix was attempted)
+      if (recent.length > 1) {
+        for (const [sig] of sigCounts) {
+          if (!snap.errorSignatures.includes(sig)) {
+            sigEverAbsent.set(sig, true);
+          }
+        }
+      }
     }
     for (const [sig, count] of sigCounts) {
       if (count >= 4) {
-        // Same error appearing in 4+ of the last 6 snapshots = stuck
+        // Same error appearing in 4+ snapshots — but only alert as "loop" if
+        // the error disappeared and came back (actual loop), not if it was always there
         const errorText = recent[recent.length - 1].terminalErrors[0]
           ?? recent[recent.length - 1].browserErrors[0]
           ?? recent[recent.length - 1].buildErrors[0]?.message
           ?? "unknown error";
 
-        alerts.push({
-          type: "loop",
-          severity: count >= 5 ? "critical" : "warning",
-          message: `Same error persisting across ${count} checks: ${errorText.slice(0, 100)}`,
-          suggestion: "This error isn't being fixed by the current approach. Try a different strategy.",
-        });
+        const isActualLoop = sigEverAbsent.get(sig) === true; // error disappeared then came back
+        if (isActualLoop) {
+          alerts.push({
+            type: "loop",
+            severity: count >= 5 ? "critical" : "warning",
+            message: `Same error recurring across ${count} checks: ${errorText.slice(0, 100)}`,
+            suggestion: "This error keeps coming back after fix attempts. Try a different strategy.",
+          });
+        } else {
+          // Persistent pre-existing error — lower severity, different message
+          alerts.push({
+            type: "loop",
+            severity: "warning",
+            message: `Persistent error across ${count} checks: ${errorText.slice(0, 100)}`,
+            suggestion: "This error has been present since monitoring started. It may be a pre-existing issue.",
+          });
+        }
 
         // Check fix library first (curated prompts), then general memory
         try {

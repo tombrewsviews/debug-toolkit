@@ -283,7 +283,7 @@ function buildCaptureStatus(live: LiveContext | null, topology: NetworkTopology 
   return lines.join("\n");
 }
 
-function buildLiveStatus(cwd: string, since?: { timestamp: string; terminalCount: number; browserCount: number; buildErrorCount: number } | null): string {
+async function buildLiveStatus(cwd: string, since?: { timestamp: string; terminalCount: number; browserCount: number; buildErrorCount: number } | null): Promise<string> {
   const sections: string[] = [];
   sections.push("# stackpack-debug — Live Situation Report\n");
 
@@ -327,7 +327,7 @@ function buildLiveStatus(cwd: string, since?: { timestamp: string; terminalCount
     }
   }
 
-  const topology = getCachedTopology(cwd);
+  const topology = await getCachedTopology(cwd);
 
   if (!hasLive && !hasLocal) {
     // No live context — do inline collection with capture status
@@ -857,7 +857,7 @@ export function createMcpServer(): McpServer {
         buildErrorCount: lastStatusBuildErrorCount,
       } : null;
 
-      const status = buildLiveStatus(cwd, since);
+      const status = await buildLiveStatus(cwd, since);
 
       // Update tracking for next diff
       const live = readLiveContext(cwd);
@@ -1137,8 +1137,8 @@ Start every debugging session with this tool.`,
         );
         return providerConfig.length > 0 ? providerConfig : undefined;
       })(),
-      networkTopology: (() => {
-        const topo = getCachedTopology(cwd);
+      networkTopology: await (async () => {
+        const topo = await getCachedTopology(cwd);
         if (!topo?.devServer) return undefined;
         const topoResult: Record<string, unknown> = {
           devServer: `${topo.devServer.process} on :${topo.devServer.port}`,

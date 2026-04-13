@@ -1,6 +1,8 @@
 import { execSync } from "node:child_process";
 import { platform } from "node:os";
-import { readConfigState } from "./capture.js";
+
+// NOTE: readConfigState is imported lazily inside detectMissingConnections()
+// to avoid a circular dependency: capture.ts → network.ts → capture.ts
 
 // --- Types ---
 
@@ -151,10 +153,10 @@ export function detectDevServers(): DevServerInfo[] {
 
 // --- Network topology ---
 
-export function getNetworkTopology(
+export async function getNetworkTopology(
   server: DevServerInfo,
   cwd: string
-): NetworkTopology {
+): Promise<NetworkTopology> {
   try {
     const output = execSync(`lsof -i -P -n -p ${server.pid}`, {
       encoding: "utf-8",
@@ -162,7 +164,7 @@ export function getNetworkTopology(
     });
 
     const { inbound, outbound } = parseLsofConnections(output, server.pid);
-    const missing = detectMissingConnections(outbound, cwd);
+    const missing = await detectMissingConnections(outbound, cwd);
 
     return {
       devServer: server,
@@ -181,10 +183,10 @@ export function getNetworkTopology(
 
 // --- Missing connection detection ---
 
-export function detectMissingConnections(
+export async function detectMissingConnections(
   outbound: Connection[],
   cwd: string
-): string[] {
+): Promise<string[]> {
   const missing: string[] = [];
 
   let configEntries: Array<{
@@ -194,6 +196,8 @@ export function detectMissingConnections(
     persistence: "env-file" | "env-var";
   }>;
   try {
+    // Lazy import to break circular dependency (capture.ts → network.ts → capture.ts)
+    const { readConfigState } = await import("./capture.js");
     configEntries = readConfigState(cwd);
   } catch {
     return [];
@@ -251,7 +255,7 @@ export function detectMissingConnections(
 let topologyCache: { result: NetworkTopology; timestamp: number } | null = null;
 const TOPOLOGY_TTL_MS = 10_000;
 
-export function getCachedTopology(cwd: string): NetworkTopology | null {
+export async function getCachedTopology(cwd: string): Promise<NetworkTopology | null> {
   const now = Date.now();
 
   if (topologyCache && now - topologyCache.timestamp < TOPOLOGY_TTL_MS) {
@@ -261,7 +265,7 @@ export function getCachedTopology(cwd: string): NetworkTopology | null {
   const servers = detectDevServers();
   if (servers.length === 0) return null;
 
-  const result = getNetworkTopology(servers[0], cwd);
+  const result = await getNetworkTopology(servers[0], cwd);
   topologyCache = { result, timestamp: now };
   return result;
 }

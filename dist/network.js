@@ -1,6 +1,5 @@
 import { execSync } from "node:child_process";
 import { platform } from "node:os";
-import { readConfigState } from "./capture.js";
 // --- Well-known service ports ---
 const SERVICE_MAP = {
     11434: "ollama",
@@ -105,14 +104,14 @@ export function detectDevServers() {
     }
 }
 // --- Network topology ---
-export function getNetworkTopology(server, cwd) {
+export async function getNetworkTopology(server, cwd) {
     try {
         const output = execSync(`lsof -i -P -n -p ${server.pid}`, {
             encoding: "utf-8",
             timeout: 5000,
         });
         const { inbound, outbound } = parseLsofConnections(output, server.pid);
-        const missing = detectMissingConnections(outbound, cwd);
+        const missing = await detectMissingConnections(outbound, cwd);
         return {
             devServer: server,
             inbound,
@@ -129,10 +128,12 @@ export function getNetworkTopology(server, cwd) {
     }
 }
 // --- Missing connection detection ---
-export function detectMissingConnections(outbound, cwd) {
+export async function detectMissingConnections(outbound, cwd) {
     const missing = [];
     let configEntries;
     try {
+        // Lazy import to break circular dependency (capture.ts → network.ts → capture.ts)
+        const { readConfigState } = await import("./capture.js");
         configEntries = readConfigState(cwd);
     }
     catch {
@@ -176,7 +177,7 @@ export function detectMissingConnections(outbound, cwd) {
 // --- Topology cache ---
 let topologyCache = null;
 const TOPOLOGY_TTL_MS = 10_000;
-export function getCachedTopology(cwd) {
+export async function getCachedTopology(cwd) {
     const now = Date.now();
     if (topologyCache && now - topologyCache.timestamp < TOPOLOGY_TTL_MS) {
         return topologyCache.result;
@@ -184,7 +185,7 @@ export function getCachedTopology(cwd) {
     const servers = detectDevServers();
     if (servers.length === 0)
         return null;
-    const result = getNetworkTopology(servers[0], cwd);
+    const result = await getNetworkTopology(servers[0], cwd);
     topologyCache = { result, timestamp: now };
     return result;
 }

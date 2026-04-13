@@ -258,7 +258,7 @@ function buildCaptureStatus(live, topology) {
     lines.push("");
     return lines.join("\n");
 }
-function buildLiveStatus(cwd, since) {
+async function buildLiveStatus(cwd, since) {
     const sections = [];
     sections.push("# stackpack-debug — Live Situation Report\n");
     // Read from live context file (written by serve process)
@@ -301,7 +301,7 @@ function buildLiveStatus(cwd, since) {
             return sections.join("\n");
         }
     }
-    const topology = getCachedTopology(cwd);
+    const topology = await getCachedTopology(cwd);
     if (!hasLive && !hasLocal) {
         // No live context — do inline collection with capture status
         sections.push(buildCaptureStatus(null, topology));
@@ -800,7 +800,7 @@ export function createMcpServer() {
             browserCount: lastStatusBrowserCount,
             buildErrorCount: lastStatusBuildErrorCount,
         } : null;
-        const status = buildLiveStatus(cwd, since);
+        const status = await buildLiveStatus(cwd, since);
         // Update tracking for next diff
         const live = readLiveContext(cwd);
         const local = peekRecentOutput();
@@ -1049,8 +1049,8 @@ Start every debugging session with this tool.`,
                 const providerConfig = config.filter(c => /PROVIDER|MODEL|OLLAMA|OPENAI|ANTHROPIC|GOOGLE|GROQ|TOGETHER|BASE_URL/i.test(c.key));
                 return providerConfig.length > 0 ? providerConfig : undefined;
             })(),
-            networkTopology: (() => {
-                const topo = getCachedTopology(cwd);
+            networkTopology: await (async () => {
+                const topo = await getCachedTopology(cwd);
                 if (!topo?.devServer)
                     return undefined;
                 const topoResult = {

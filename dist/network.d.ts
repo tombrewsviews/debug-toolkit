@@ -23,7 +23,7 @@ export declare function parseLsofConnections(output: string, serverPid: number):
 };
 export declare const DEV_PORTS: number[];
 export declare function detectDevServers(): DevServerInfo[];
-export declare function getNetworkTopology(server: DevServerInfo, cwd: string): NetworkTopology;
-export declare function detectMissingConnections(outbound: Connection[], cwd: string): string[];
-export declare function getCachedTopology(cwd: string): NetworkTopology | null;
+export declare function getNetworkTopology(server: DevServerInfo, cwd: string): Promise<NetworkTopology>;
+export declare function detectMissingConnections(outbound: Connection[], cwd: string): Promise<string[]>;
+export declare function getCachedTopology(cwd: string): Promise<NetworkTopology | null>;
 export declare function clearTopologyCache(): void;

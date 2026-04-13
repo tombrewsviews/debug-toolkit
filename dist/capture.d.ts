@@ -201,7 +201,7 @@ export declare function readConfigState(cwd: string): Array<{
  * Write live context snapshot to .debug/live-context.json.
  * Called periodically by the serve process.
  */
-export declare function writeLiveContext(cwd: string): void;
+export declare function writeLiveContext(cwd: string): Promise<void>;
 /**
  * Read live context from .debug/live-context.json.
  * Called by MCP resource handler (separate process from serve).

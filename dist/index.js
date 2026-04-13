@@ -745,7 +745,7 @@ async function monitorRunningApp(cwd) {
     }
     const server = servers[0];
     success(`Found dev server: ${c.bold}${server.process}${c.reset} on port ${c.cyan}${server.port}${c.reset} (PID ${server.pid})\n`);
-    const topology = getNetworkTopology(server, cwd);
+    const topology = await getNetworkTopology(server, cwd);
     if (topology.outbound.length > 0) {
         kv("backends", topology.outbound.map((conn) => `${conn.service ?? "unknown"}:${conn.remotePort}`).join(", "));
     }
@@ -1080,10 +1080,10 @@ async function main() {
             // MCP server runs in a separate process (via .mcp.json config).
             // Don't start it here — stdio is shared with the child dev server.
             // Show network topology after proxy is set up
-            setTimeout(() => {
+            setTimeout(async () => {
                 const servers = detectDevServers();
                 if (servers.length > 0) {
-                    const topology = getNetworkTopology(servers[0], cwd);
+                    const topology = await getNetworkTopology(servers[0], cwd);
                     if (topology.outbound.length > 0) {
                         kv("backends", topology.outbound.map((conn) => `${conn.service ?? "unknown"}:${conn.remotePort}`).join(", "));
                     }

@@ -942,13 +942,13 @@ function redactConfigValue(key: string, value: string): string {
  * Write live context snapshot to .debug/live-context.json.
  * Called periodically by the serve process.
  */
-export function writeLiveContext(cwd: string): void {
+export async function writeLiveContext(cwd: string): Promise<void> {
   // Status shows max ~110 lines — no need to peek more than that
   const recent = peekRecentOutput({ terminalLines: 100, browserLines: 50, buildErrors: 30, runtimeErrors: 20 });
   const hasTerminal = recent.counts.terminal > 0;
   const hasBrowser = recent.counts.browser > 0;
   const captureMode: LiveContext["captureMode"] = (hasTerminal || hasBrowser) ? "full" : "active-collection";
-  const topology = getCachedTopology(cwd);
+  const topology = await getCachedTopology(cwd);
   const context: LiveContext = {
     updatedAt: new Date().toISOString(),
     captureMode,
@@ -997,7 +997,7 @@ export function readLiveContext(cwd: string): LiveContext | null {
  */
 export function startLiveContextWriter(cwd: string): { stop: () => void } {
   // Write immediately, then every 5 seconds
-  writeLiveContext(cwd);
-  const interval = setInterval(() => writeLiveContext(cwd), 5_000);
+  writeLiveContext(cwd).catch(() => {});
+  const interval = setInterval(() => { writeLiveContext(cwd).catch(() => {}); }, 5_000);
   return { stop: () => clearInterval(interval) };
 }
