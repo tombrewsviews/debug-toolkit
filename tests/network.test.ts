@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLsofListeners, parseLsofConnections } from "../src/network.js";
+import { parseLsofListeners, parseLsofConnections, detectDevServers, inferService } from "../src/network.js";
 
 describe("lsof output parsing", () => {
   it("should parse LISTEN entries from lsof output", () => {
@@ -37,5 +37,20 @@ node    52524 user   26u  IPv4 0x1111      0t0  TCP 127.0.0.1:54323->127.0.0.1:5
   it("should handle empty lsof output", () => {
     expect(parseLsofListeners("")).toHaveLength(0);
     expect(parseLsofConnections("", 1234)).toEqual({ inbound: [], outbound: [] });
+  });
+});
+
+describe("service inference", () => {
+  it("should infer well-known services", () => {
+    expect(inferService(11434)).toBe("ollama");
+    expect(inferService(5432)).toBe("postgres");
+    expect(inferService(6379)).toBe("redis");
+    expect(inferService(3306)).toBe("mysql");
+    expect(inferService(27017)).toBe("mongodb");
+  });
+
+  it("should return undefined for unknown ports", () => {
+    expect(inferService(54321)).toBeUndefined();
+    expect(inferService(8888)).toBeUndefined();
   });
 });
