@@ -1137,6 +1137,23 @@ Start every debugging session with this tool.`,
         );
         return providerConfig.length > 0 ? providerConfig : undefined;
       })(),
+      networkTopology: (() => {
+        const topo = getCachedTopology(cwd);
+        if (!topo?.devServer) return undefined;
+        const topoResult: Record<string, unknown> = {
+          devServer: `${topo.devServer.process} on :${topo.devServer.port}`,
+          inbound: topo.inbound.length,
+          outbound: topo.outbound.map((c) => `${c.service ?? "unknown"}:${c.remotePort}`),
+        };
+        if (topo.missing && topo.missing.length > 0) {
+          topoResult.missingConnections = topo.missing;
+          topoResult.hint = "Expected backend connections not found — check middleware/auth layer or verify service is running.";
+        }
+        if (topo.outbound.length === 0 && topo.inbound.length > 0) {
+          topoResult.hint = "Server has inbound connections but no outbound — request may be stuck in middleware before reaching backend.";
+        }
+        return topoResult;
+      })(),
       visualError,
       userFrames: result.frames.filter((f) => f.isUserCode).map((f) => ({
         fn: f.fn,
