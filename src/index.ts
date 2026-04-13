@@ -21,7 +21,7 @@ import { startCaptureServer } from "./capture-server.js";
 import { getOpenIssues, getIssue, solveIssue, listFixPrompts } from "./fix-library.js";
 import { banner, info, success, warn, error, dim, section, kv, printHelp, sym, c, select, spinner, type SelectOption } from "./cli.js";
 import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration, type EnvironmentCapabilities } from "./adapters.js";
-import { checkForUpdate, getPackageVersion } from "./utils.js";
+import { checkForUpdate, getPackageVersion, backgroundSelfUpgrade } from "./utils.js";
 
 // --- Parse ---
 
@@ -672,12 +672,11 @@ async function guidedSetup(cwd: string): Promise<void> {
   if (mcpExists) {
     success(`Already set up in this project. Ready to use in Claude Code.\n`);
 
-    // Check for updates
+    // Check for updates — background auto-upgrade is already running,
+    // but show a message so the user knows what's happening
     const update = checkForUpdate();
     if (update.updateAvailable) {
-      warn(`\n  ${c.yellow}${c.bold}Update available: v${update.current} → v${update.latest}${c.reset}`);
-      info(`  Run: ${c.cyan}npx stackpack-debug@latest${c.reset}`);
-      info(`  Or in Claude Code: ${c.cyan}debug_setup action='update'${c.reset}\n`);
+      info(`\n  ${c.yellow}${c.bold}Upgrading:${c.reset} v${update.current} ${sym.arrow} v${update.latest} ${c.dim}(in background)${c.reset}`);
     }
 
     // Silently update SKILL.md and command on every run (picks up new content from package updates)
@@ -822,6 +821,19 @@ async function main(): Promise<void> {
   const parsed = parseArgs(process.argv);
   const cwd = resolve(process.cwd());
   setCwd(cwd);
+
+  // Background self-upgrade: check for new version and upgrade silently on every run.
+  // Skipped for the "update" command (which handles its own upgrade flow) and non-TTY MCP mode.
+  if (parsed.command !== "update" && process.stdout.isTTY) {
+    backgroundSelfUpgrade((result) => {
+      if (result.upgraded) {
+        process.stderr.write(`\n  ${c.green}${sym.check}${c.reset} ${c.bold}Auto-upgraded:${c.reset} v${result.from} ${sym.arrow} v${result.to}\n`);
+        process.stderr.write(`  ${c.dim}Restart to use the new version.${c.reset}\n\n`);
+        // Refresh SKILL.md and commands so they match the new version
+        try { initCommand(cwd); } catch { /* best effort */ }
+      }
+    });
+  }
 
   switch (parsed.command) {
     case "help": printHelp(); break;

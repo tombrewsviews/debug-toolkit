@@ -30,7 +30,7 @@ import { explainTriage, explainConfidence } from "./explain.js";
 import { recordOutcome, getTelemetry, getFixRateForError } from "./telemetry.js";
 import { detectEnvironment, listInstallable, installIntegration } from "./adapters.js";
 import { connectToGhostOs, disconnectGhostOs, isGhostConnected, resetConnectionState, takeScreenshot, readScreen, findElements, annotateScreen, getVisualDiagnostic, SCREEN_RECORDING_SETTINGS_URL, } from "./ghost-bridge.js";
-import { saveScreenshot, getPackageVersion, checkForUpdate, runSelfUpdate } from "./utils.js";
+import { saveScreenshot, getPackageVersion, checkForUpdate, runSelfUpdate, backgroundSelfUpgrade } from "./utils.js";
 import { enableActivityWriter, logActivity } from "./activity.js";
 import { analyzeLoop } from "./loop.js";
 import { signatureFromError } from "./signature.js";
@@ -43,6 +43,7 @@ const teamClient = TeamMemoryClient.fromEnv();
 // Cached update check — run once per MCP session, non-blocking
 let updateCheckResult = null;
 let updateCheckDone = false;
+let backgroundUpgradeStarted = false;
 function lazyUpdateCheck() {
     if (updateCheckDone)
         return;
@@ -53,6 +54,15 @@ function lazyUpdateCheck() {
         updateCheckResult = result;
     }
     catch { /* silent */ }
+    // Also trigger a background self-upgrade (once per MCP session)
+    if (!backgroundUpgradeStarted) {
+        backgroundUpgradeStarted = true;
+        backgroundSelfUpgrade((result) => {
+            if (result.upgraded) {
+                updateCheckResult = { updateAvailable: false, current: result.to, latest: result.to };
+            }
+        });
+    }
 }
 // Status diff tracking — detect changes between reads
 let lastStatusReadAt = null;

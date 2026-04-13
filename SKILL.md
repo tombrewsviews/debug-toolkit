@@ -172,6 +172,8 @@ Check/install integrations, check for updates, or update stackpack-debug.
 - `check-update` — compare installed version against npm registry
 - `update` — update stackpack-debug to latest, then restart Claude Code
 
+**Note:** stackpack-debug auto-upgrades in the background on every startup. Manual updates are rarely needed.
+
 ## Rules
 
 1. **Read `debug://status` BEFORE investigating.** It's free context.

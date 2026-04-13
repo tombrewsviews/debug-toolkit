@@ -5,7 +5,7 @@
 import { existsSync, writeFileSync, readFileSync, renameSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 
 export function getPackageVersion(): string {
   try {
@@ -68,6 +68,73 @@ export function runSelfUpdate(): { success: boolean; from: string; to: string; m
   } catch (e) {
     return { success: false, from: before, to: before, message: `Update failed: ${e instanceof Error ? e.message : String(e)}` };
   }
+}
+
+/**
+ * Runs a background self-upgrade on startup. Non-blocking — spawns the upgrade
+ * in a child process and calls `onResult` when it completes.
+ *
+ * Strategy:
+ * 1. Check npm registry for latest version (fast, ~1-2s)
+ * 2. If a newer version exists, upgrade in-place (global or npx cache)
+ * 3. Notify the caller with the result so it can print a message
+ *
+ * The child process is unref'd so it won't keep the parent alive if the user
+ * exits before the upgrade finishes.
+ */
+export function backgroundSelfUpgrade(onResult: (result: {
+  upgraded: boolean;
+  from: string;
+  to: string;
+  message: string;
+}) => void): void {
+  const current = getPackageVersion();
+
+  // Spawn a detached node process that checks + upgrades
+  const script = `
+    const { execSync } = require("child_process");
+    try {
+      const latest = execSync("npm view stackpack-debug version", { encoding: "utf-8", timeout: 10000 }).trim();
+      const current = ${JSON.stringify(current)};
+      const pa = latest.split(".").map(Number);
+      const pb = current.split(".").map(Number);
+      let newer = false;
+      for (let i = 0; i < 3; i++) {
+        if ((pa[i] || 0) > (pb[i] || 0)) { newer = true; break; }
+        if ((pa[i] || 0) < (pb[i] || 0)) break;
+      }
+      if (!newer) {
+        process.stdout.write(JSON.stringify({ upgraded: false, from: current, to: current, message: "" }));
+        process.exit(0);
+      }
+      // Try global install first, fall back to npx cache refresh
+      try {
+        execSync("npm install -g stackpack-debug@latest", { stdio: "pipe", timeout: 60000 });
+      } catch {
+        execSync("npx -y stackpack-debug@latest --version", { stdio: "pipe", timeout: 30000 });
+      }
+      process.stdout.write(JSON.stringify({ upgraded: true, from: current, to: latest, message: "upgraded" }));
+    } catch (e) {
+      process.stdout.write(JSON.stringify({ upgraded: false, from: ${JSON.stringify(current)}, to: ${JSON.stringify(current)}, message: "check-failed" }));
+    }
+  `;
+
+  const child = spawn(process.execPath, ["-e", script], {
+    stdio: ["ignore", "pipe", "ignore"],
+    detached: true,
+  });
+
+  let stdout = "";
+  child.stdout!.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+  child.on("close", () => {
+    try {
+      const result = JSON.parse(stdout);
+      onResult(result);
+    } catch {
+      // Silent — upgrade check failed, no big deal
+    }
+  });
+  child.unref();
 }
 
 export function memoryPath(cwd: string): string {

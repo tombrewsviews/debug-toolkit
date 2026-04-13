@@ -39,7 +39,7 @@ import {
   takeScreenshot, readScreen, findElements, annotateScreen, getVisualDiagnostic,
   SCREEN_RECORDING_SETTINGS_URL,
 } from "./ghost-bridge.js";
-import { screenshotDir, saveScreenshot, getPackageVersion, checkForUpdate, runSelfUpdate } from "./utils.js";
+import { screenshotDir, saveScreenshot, getPackageVersion, checkForUpdate, runSelfUpdate, backgroundSelfUpgrade } from "./utils.js";
 import { enableActivityWriter, logActivity } from "./activity.js";
 import { analyzeLoop } from "./loop.js";
 import { signatureFromError } from "./signature.js";
@@ -55,6 +55,7 @@ const teamClient = TeamMemoryClient.fromEnv();
 // Cached update check — run once per MCP session, non-blocking
 let updateCheckResult: { updateAvailable: boolean; current: string; latest: string } | null = null;
 let updateCheckDone = false;
+let backgroundUpgradeStarted = false;
 
 function lazyUpdateCheck(): void {
   if (updateCheckDone) return;
@@ -64,6 +65,16 @@ function lazyUpdateCheck(): void {
     const result = checkForUpdate();
     updateCheckResult = result;
   } catch { /* silent */ }
+
+  // Also trigger a background self-upgrade (once per MCP session)
+  if (!backgroundUpgradeStarted) {
+    backgroundUpgradeStarted = true;
+    backgroundSelfUpgrade((result) => {
+      if (result.upgraded) {
+        updateCheckResult = { updateAvailable: false, current: result.to, latest: result.to };
+      }
+    });
+  }
 }
 
 // Status diff tracking — detect changes between reads

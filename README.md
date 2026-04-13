@@ -569,6 +569,14 @@ src/
 
 ## Changelog
 
+### v0.22.0 — Auto-Upgrade on Startup
+
+- **Background self-upgrade** — every time you run `spdg` (or any CLI command), the toolkit checks npm for a newer version and upgrades in the background. No manual `spdg update` needed — you're always on the latest version by the next restart.
+- **Non-blocking** — the upgrade runs in a detached child process. The CLI starts instantly; the upgrade message appears in the terminal when it finishes (typically 5-10s).
+- **MCP session upgrade** — the MCP server also triggers a background upgrade on first `debug://status` read, so even headless sessions stay current.
+- **Auto-refresh** — after upgrading, SKILL.md, activation rules, and commands are refreshed automatically to match the new version.
+- **Zero-config** — no flags, no settings. Works with both global installs (`npm i -g`) and npx usage.
+
 ### v0.21.0 — Server-Side Visibility + Configuration Awareness
 
 - **Runtime error parsing** — stderr output is now parsed for Node.js runtime errors: unhandled promise rejections, uncaught exceptions (TypeError, ReferenceError, etc.), connection errors (ECONNREFUSED, ETIMEDOUT), server error logs (`[ERROR]`, HTTP 4xx/5xx), and `console.error` with stack traces. These appear as a dedicated "Runtime Errors (server-side)" section in `debug://status` with type, file location, message, and stack trace — errors that were previously invisible because they didn't reach browser devtools.
