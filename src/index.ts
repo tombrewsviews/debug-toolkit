@@ -22,6 +22,7 @@ import { getOpenIssues, getIssue, solveIssue, listFixPrompts } from "./fix-libra
 import { banner, info, success, warn, error, dim, section, kv, printHelp, sym, c, select, spinner, type SelectOption } from "./cli.js";
 import { detectEnvironment, formatDoctorReport, listInstallable, installIntegration, type EnvironmentCapabilities } from "./adapters.js";
 import { checkForUpdate, getPackageVersion, backgroundSelfUpgrade } from "./utils.js";
+import { detectDevServers, getNetworkTopology, clearTopologyCache } from "./network.js";
 
 // --- Parse ---
 
@@ -557,9 +558,14 @@ function buildMenuOptions(cwd: string): SelectOption[] {
   const { cmd: devCmd } = detectDevCommand(cwd);
   return [
     {
-      label: "Start dev server with capture",
-      desc: `Runs ${devCmd} with browser console, network, and build error capture.`,
+      label: "Start dev server with full capture",
+      desc: `Wraps ${devCmd} with terminal, browser, and network monitoring.`,
       detail: "Launches behind an HTTP proxy with auto-capture. Stop anytime with Ctrl+C.",
+    },
+    {
+      label: "Monitor running app (no restart)",
+      desc: "Attaches to your already-running dev server. Network, config, and build watching.",
+      detail: "Detects dev server port via lsof. No terminal/browser capture without proxy.",
     },
     {
       label: "Check setup health",
@@ -739,6 +745,85 @@ async function guidedSetup(cwd: string): Promise<void> {
   await mainMenu(cwd);
 }
 
+async function monitorRunningApp(cwd: string): Promise<void> {
+  section("Monitor Mode");
+
+  info("Scanning for running dev server...\n");
+  let servers = detectDevServers();
+
+  if (servers.length === 0) {
+    info("Waiting for dev server... Start one in another terminal.\n");
+    dim("  Scanning ports: 3000, 3001, 4000, 5173, 5174, 8080, 8081, 1420");
+    info("");
+
+    // Poll every 5s until a dev server appears or user cancels
+    servers = await new Promise<typeof servers>((resolve) => {
+      const interval = setInterval(() => {
+        const found = detectDevServers();
+        if (found.length > 0) {
+          clearInterval(interval);
+          resolve(found);
+        }
+      }, 5_000);
+
+      const onExit = () => { clearInterval(interval); resolve([]); };
+      process.once("SIGINT", onExit);
+    });
+
+    if (servers.length === 0) {
+      info("Cancelled.");
+      return;
+    }
+  }
+
+  const server = servers[0];
+  success(`Found dev server: ${c.bold}${server.process}${c.reset} on port ${c.cyan}${server.port}${c.reset} (PID ${server.pid})\n`);
+
+  const topology = getNetworkTopology(server, cwd);
+  if (topology.outbound.length > 0) {
+    kv("backends", topology.outbound.map((conn) => `${conn.service ?? "unknown"}:${conn.remotePort}`).join(", "));
+  }
+  if (topology.missing && topology.missing.length > 0) {
+    for (const m of topology.missing) {
+      warn(`Missing expected connection: ${m}`);
+    }
+  }
+  info("");
+
+  info("Monitoring network, config, and build state. Press Ctrl+C to stop.\n");
+
+  // Start capture server for browser events
+  const capturePort = 3100;
+  const captureServer = startCaptureServer({
+    port: capturePort,
+    cwd,
+    onEvent: (evt) => {
+      const text = evt.message ?? evt.args ?? evt.reason ?? evt.text ?? evt.error ?? "";
+      if (evt.type === "error" || evt.type === "rejection") {
+        console.log(`  \x1b[31m${sym.cross}\x1b[0m ${String(text).slice(0, 120)}`);
+      }
+    },
+  });
+  dim(`  Browser capture server: ws://localhost:${capturePort}/__spdg/ws`);
+
+  const liveWriter = startLiveContextWriter(cwd);
+  const loopWatcher = startLoopWatcher(cwd);
+  const activityFeed = startActivityFeed(cwd);
+
+  const cleanup = () => {
+    activityFeed.stop();
+    liveWriter.stop();
+    loopWatcher.stop();
+    captureServer.stop();
+    clearTopologyCache();
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+
+  // Keep alive
+  setInterval(() => {}, 60_000);
+}
+
 async function mainMenu(cwd: string): Promise<void> {
   // Menu loop — keeps returning to menu after each action
   while (true) {
@@ -752,8 +837,9 @@ async function mainMenu(cwd: string): Promise<void> {
 
     switch (choice) {
       case 0: await guidedServe(cwd); return; // serve takes over, don't loop
-      case 1: doctorCommand(cwd); break;
-      case 2: initCommand(cwd); break;
+      case 1: await monitorRunningApp(cwd); return;
+      case 2: doctorCommand(cwd); break;
+      case 3: initCommand(cwd); break;
     }
 
     // After command completes, show separator before next menu
